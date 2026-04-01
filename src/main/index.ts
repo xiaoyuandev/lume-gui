@@ -1,15 +1,46 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
-import { join } from 'path'
+import { app, shell, BrowserWindow, ipcMain, Tray, Menu, nativeImage, dialog } from 'electron'
+import { join } from 'node:path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import { LumeManager } from './lume'
+import { loadSettings, saveSettings } from './settings'
+import type { AppSettings, CreateVmInput, UpdateVmInput } from '../shared/types'
+
+let mainWindow: BrowserWindow | null = null
+let tray: Tray | null = null
+const lume = new LumeManager()
+let isQuitting = false
+
+function showMainWindow(): void {
+  if (!mainWindow) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+}
+
+async function applySystemSettings(settings: AppSettings): Promise<void> {
+  if (process.platform === 'darwin' || process.platform === 'win32') {
+    app.setLoginItemSettings({
+      openAtLogin: settings.startAtLogin
+    })
+  }
+
+  if (settings.autoStartServe) {
+    await lume.ensureServeRunning()
+  } else {
+    lume.stopServe()
+  }
+}
 
 function createWindow(): void {
-  // Create the browser window.
-  const mainWindow = new BrowserWindow({
-    width: 900,
-    height: 670,
+  mainWindow = new BrowserWindow({
+    width: 1460,
+    height: 920,
+    minWidth: 1180,
+    minHeight: 760,
     show: false,
     autoHideMenuBar: true,
+    title: 'Lume GUI',
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -18,7 +49,15 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => {
-    mainWindow.show()
+    mainWindow?.show()
+  })
+
+  mainWindow.on('close', async (event) => {
+    const settings = await loadSettings()
+    if (settings.backgroundMode && !isQuitting) {
+      event.preventDefault()
+      mainWindow?.hide()
+    }
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -26,8 +65,6 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  // HMR for renderer base on electron-vite cli.
-  // Load the remote URL for development or the local html file for production.
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
@@ -35,40 +72,83 @@ function createWindow(): void {
   }
 }
 
-// This method will be called when Electron has finished
-// initialization and is ready to create browser windows.
-// Some APIs can only be used after this event occurs.
+function createTray(): void {
+  if (tray) return
+
+  tray = new Tray(nativeImage.createFromPath(icon))
+  tray.setToolTip('Lume GUI')
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: 'Show Lume GUI', click: () => showMainWindow() },
+      { label: 'Restart lume serve', click: () => void lume.restartServe() },
+      {
+        label: 'Quit',
+        click: () => {
+          isQuitting = true
+          app.quit()
+        }
+      }
+    ])
+  )
+  tray.on('click', () => showMainWindow())
+}
+
+function registerIpcHandlers(): void {
+  ipcMain.handle('lume:getStatus', () => lume.getStatus())
+  ipcMain.handle('lume:listVms', () => lume.listVms())
+  ipcMain.handle('lume:getVm', (_, name: string) => lume.getVm(name))
+  ipcMain.handle('lume:createVm', (_, input: CreateVmInput) => lume.createVm(input))
+  ipcMain.handle('lume:startVm', (_, name: string) => lume.startVm(name))
+  ipcMain.handle('lume:stopVm', (_, name: string) => lume.stopVm(name))
+  ipcMain.handle('lume:deleteVm', (_, name: string) => lume.deleteVm(name))
+  ipcMain.handle('lume:updateVm', (_, input: UpdateVmInput) => lume.updateVm(input))
+  ipcMain.handle('lume:getVmLogs', (_, name: string) => lume.getVmLogs(name))
+  ipcMain.handle('lume:listImages', () => lume.listImages())
+  ipcMain.handle('lume:restartServe', () => lume.restartServe())
+  ipcMain.handle('settings:get', () => loadSettings())
+  ipcMain.handle('settings:save', async (_, input: AppSettings) => {
+    const settings = await saveSettings(input)
+    await applySystemSettings(settings)
+    return settings
+  })
+  ipcMain.handle('dialog:chooseDirectory', async () => {
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, {
+          properties: ['openDirectory', 'createDirectory']
+        })
+      : await dialog.showOpenDialog({
+          properties: ['openDirectory', 'createDirectory']
+        })
+    return result.canceled ? null : (result.filePaths[0] ?? null)
+  })
+}
+
 app.whenReady().then(() => {
-  // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
 
-  // Default open or close DevTools by F12 in development
-  // and ignore CommandOrControl + R in production.
-  // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // IPC test
-  ipcMain.on('ping', () => console.log('pong'))
-
   createWindow()
+  createTray()
+  registerIpcHandlers()
 
-  app.on('activate', function () {
-    // On macOS it's common to re-create a window in the app when the
-    // dock icon is clicked and there are no other windows open.
+  loadSettings().then((settings) => applySystemSettings(settings))
+
+  app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    showMainWindow()
   })
 })
 
-// Quit when all windows are closed, except on macOS. There, it's common
-// for applications and their menu bar to stay active until the user quits
-// explicitly with Cmd + Q.
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
 })
 
-// In this file you can include the rest of your app's specific main process
-// code. You can also put them in separate files and require them here.
+app.on('before-quit', () => {
+  isQuitting = true
+  lume.stopServe()
+})

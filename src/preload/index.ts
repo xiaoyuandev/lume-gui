@@ -1,12 +1,24 @@
-import { contextBridge } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
+import type { AppSettings, CreateVmInput, LumeApi, UpdateVmInput } from '../shared/types'
 
-// Custom APIs for renderer
-const api = {}
+const api: LumeApi = {
+  getStatus: () => ipcRenderer.invoke('lume:getStatus'),
+  listVms: () => ipcRenderer.invoke('lume:listVms'),
+  getVm: (name) => ipcRenderer.invoke('lume:getVm', name),
+  createVm: (input: CreateVmInput) => ipcRenderer.invoke('lume:createVm', input),
+  startVm: (name) => ipcRenderer.invoke('lume:startVm', name),
+  stopVm: (name) => ipcRenderer.invoke('lume:stopVm', name),
+  deleteVm: (name) => ipcRenderer.invoke('lume:deleteVm', name),
+  updateVm: (input: UpdateVmInput) => ipcRenderer.invoke('lume:updateVm', input),
+  getVmLogs: (name) => ipcRenderer.invoke('lume:getVmLogs', name),
+  listImages: () => ipcRenderer.invoke('lume:listImages'),
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  saveSettings: (input: AppSettings) => ipcRenderer.invoke('settings:save', input),
+  chooseDirectory: () => ipcRenderer.invoke('dialog:chooseDirectory'),
+  restartServe: () => ipcRenderer.invoke('lume:restartServe')
+}
 
-// Use `contextBridge` APIs to expose Electron APIs to
-// renderer only if context isolation is enabled, otherwise
-// just add to the DOM global.
 if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('electron', electronAPI)
