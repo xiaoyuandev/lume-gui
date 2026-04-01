@@ -1,6 +1,11 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { promisify } from 'node:util'
 import { buildCreateArgs } from '../shared/create-command'
+import {
+  deleteVmPreferences,
+  loadVmPreferences,
+  saveVmPreferences
+} from './settings'
 import type {
   AppStatus,
   CommandResult,
@@ -200,7 +205,7 @@ export class LumeManager {
       }
 
       if (execError.code === 'ENOENT') {
-        this.lastError = '未找到 lume 命令，请先安装并确保其在 PATH 中可访问。'
+        this.lastError = 'The `lume` command was not found. Install Lume and ensure it is available in PATH.'
       } else if (typeof execError.stderr === 'string' && execError.stderr.trim()) {
         this.lastError = execError.stderr.trim()
       }
@@ -234,6 +239,8 @@ export class LumeManager {
   }
 
   async getVm(name: string): Promise<VmDetail> {
+    const preferences = await loadVmPreferences(name)
+
     const jsonResult = await this.run(['get', name, '--format', 'json'])
     if (jsonResult.code === 0) {
       const parsed = parseVmArray(jsonResult.stdout)[0]
@@ -244,11 +251,9 @@ export class LumeManager {
           config: parsed,
           raw: jsonResult.stdout,
           resolution: typeof parsed['display'] === 'string' ? String(parsed['display']) : null,
-          headless: false,
-          background: false,
-          sharedDirectories: Array.isArray(parsed['sharedDirectories'])
-            ? parsed['sharedDirectories'].map((entry) => String(entry))
-            : []
+          headless: preferences.headless,
+          background: preferences.background,
+          sharedDirectories: preferences.sharedDirectories
         }
       }
     }
@@ -262,9 +267,9 @@ export class LumeManager {
       config,
       raw: result.stdout,
       resolution: typeof config['display'] === 'string' ? String(config['display']) : null,
-      headless: false,
-      background: false,
-      sharedDirectories: []
+      headless: preferences.headless,
+      background: preferences.background,
+      sharedDirectories: preferences.sharedDirectories
     }
   }
 
@@ -276,36 +281,59 @@ export class LumeManager {
         success: false,
         command: ['lume', ...buildCreateArgs(input)],
         stdout: '',
-        stderr: `虚拟机 ${input.name.trim()} 已存在，请更换名称。`,
+        stderr: `Virtual machine ${input.name.trim()} already exists. Choose a different name.`,
         code: 1
       }
     }
 
     const command = buildCreateArgs(input)
     const result = await this.run(command)
+    if (result.code === 0) {
+      await saveVmPreferences(input.name, {
+        headless: input.headless,
+        background: input.background,
+        sharedDirectories: input.sharedDirectories
+      })
+    }
     return { success: result.code === 0, command: ['lume', ...command], ...result }
   }
 
   async startVm(name: string): Promise<CommandResult> {
-    const command = ['run', name]
+    const preferences = await loadVmPreferences(name)
+    const command = ['run']
+
+    if (preferences.headless) {
+      command.push('--no-display')
+    }
+
+    for (const directory of preferences.sharedDirectories) {
+      command.push('--shared-dir', directory)
+    }
+
+    command.push(name)
+
     try {
       const child = spawn('lume', command, {
-        detached: true,
+        detached: preferences.background,
         stdio: 'ignore'
       })
-      child.unref()
+      if (preferences.background) {
+        child.unref()
+      }
 
       return {
         success: true,
         command: ['lume', ...command],
-        stdout: `lume run ${name} started in detached mode`,
+        stdout: preferences.background
+          ? `lume run ${name} started in background mode`
+          : `lume run ${name} started`,
         stderr: '',
         code: 0
       }
     } catch (error) {
       const spawnError = error as NodeJS.ErrnoException
       if (spawnError.code === 'ENOENT') {
-        this.lastError = '未找到 lume 命令，请先安装并确保其在 PATH 中可访问。'
+        this.lastError = 'The `lume` command was not found. Install Lume and ensure it is available in PATH.'
       } else {
         this.lastError = spawnError.message
       }
@@ -329,12 +357,22 @@ export class LumeManager {
   async deleteVm(name: string): Promise<CommandResult> {
     const command = ['delete', name, '--force']
     const result = await this.run(command)
+    if (result.code === 0) {
+      await deleteVmPreferences(name)
+    }
     return { success: result.code === 0, command: ['lume', ...command], ...result }
   }
 
   async updateVm(input: UpdateVmInput): Promise<CommandResult> {
     const command = buildUpdateArgs(input)
     const result = await this.run(command)
+    if (result.code === 0) {
+      await saveVmPreferences(input.name, {
+        headless: input.headless,
+        background: input.background,
+        sharedDirectories: input.sharedDirectories
+      })
+    }
     return { success: result.code === 0, command: ['lume', ...command], ...result }
   }
 

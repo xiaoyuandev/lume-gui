@@ -25,6 +25,12 @@ export interface VmDetail extends VmSummary {
   logs?: string
 }
 
+export interface VmPreferences {
+  headless: boolean
+  background: boolean
+  sharedDirectories: string[]
+}
+
 export interface ImageSummary {
   name: string
   version?: string | null

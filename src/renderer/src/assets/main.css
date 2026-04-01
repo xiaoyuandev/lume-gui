@@ -254,6 +254,10 @@ textarea {
   grid-column: span 2;
 }
 
+.panel.full {
+  grid-column: 1 / -1;
+}
+
 .panel-header {
   display: flex;
   align-items: center;
@@ -415,6 +419,14 @@ textarea {
 .embedded-detail {
   display: grid;
   gap: 18px;
+}
+
+.detail-note {
+  padding: 16px 18px;
+  border-radius: 18px;
+  background: rgba(31, 35, 29, 0.06);
+  color: var(--text-muted);
+  line-height: 1.6;
 }
 
 .directory-editor {

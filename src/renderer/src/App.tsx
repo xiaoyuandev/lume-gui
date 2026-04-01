@@ -104,7 +104,6 @@ function App(): React.JSX.Element {
   const [vmForm, setVmForm] = useState<CreateVmInput>(createInitialForm(emptySettings))
   const [vms, setVms] = useState<VmSummary[]>([])
   const [selectedVm, setSelectedVm] = useState<VmDetail | null>(null)
-  const [logs, setLogs] = useState('')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [pendingVmNames, setPendingVmNames] = useState<string[]>([])
@@ -122,12 +121,9 @@ function App(): React.JSX.Element {
 
     try {
       const detail = await window.api.getVm(targetVm)
-      const vmLogs = await window.api.getVmLogs(targetVm)
-      setSelectedVm({ ...detail, logs: vmLogs })
-      setLogs(vmLogs)
+      setSelectedVm(detail)
     } catch {
       setSelectedVm(null)
-      setLogs('')
     }
   }
 
@@ -154,7 +150,7 @@ function App(): React.JSX.Element {
       await task()
       setMessage(successMessage)
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '操作失败')
+      setMessage(error instanceof Error ? error.message : 'Operation failed.')
     } finally {
       setBusy(false)
     }
@@ -189,9 +185,7 @@ function App(): React.JSX.Element {
       if (vm) {
         if (selectedVm?.name === name) {
           const detail = await window.api.getVm(name)
-          const vmLogs = await window.api.getVmLogs(name)
-          setSelectedVm({ ...detail, logs: vmLogs })
-          setLogs(vmLogs)
+          setSelectedVm(detail)
         }
 
         if (vm.status !== 'starting' && vm.status !== 'stopping') {
@@ -210,10 +204,8 @@ function App(): React.JSX.Element {
     setOverviewTab('details')
     await runAction(async () => {
       const detail = await window.api.getVm(name)
-      const vmLogs = await window.api.getVmLogs(name)
-      setSelectedVm({ ...detail, logs: vmLogs })
-      setLogs(vmLogs)
-    }, `已加载 ${name} 详情`)
+      setSelectedVm(detail)
+    }, `Loaded details for ${name}.`)
   }
 
   async function mutateVm(
@@ -227,13 +219,13 @@ function App(): React.JSX.Element {
     try {
       const result = await action()
       if (!result.success) {
-        throw new Error(result.stderr || result.stdout || '命令执行失败')
+        throw new Error(result.stderr || result.stdout || 'Command execution failed.')
       }
       await refreshDashboard(selectedName)
       setMessage(successMessage)
       return true
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '操作失败')
+      setMessage(error instanceof Error ? error.message : 'Operation failed.')
       return false
     } finally {
       setVmPending(vmName, false)
@@ -242,7 +234,7 @@ function App(): React.JSX.Element {
 
   async function startVm(name: string): Promise<void> {
     patchVm(name, (vm) => ({ ...vm, status: 'starting' }))
-    const success = await mutateVm(name, () => window.api.startVm(name), `已启动 ${name}`, name)
+    const success = await mutateVm(name, () => window.api.startVm(name), `Started ${name}.`, name)
     if (!success) {
       await refreshDashboard(name)
       return
@@ -252,7 +244,7 @@ function App(): React.JSX.Element {
 
   async function stopVm(name: string): Promise<void> {
     patchVm(name, (vm) => ({ ...vm, status: 'stopping' }))
-    const success = await mutateVm(name, () => window.api.stopVm(name), `已停止 ${name}`, name)
+    const success = await mutateVm(name, () => window.api.stopVm(name), `Stopped ${name}.`, name)
     if (!success) {
       await refreshDashboard(name)
       return
@@ -270,7 +262,7 @@ function App(): React.JSX.Element {
         storagePath: current.storagePath || next.defaultStoragePath
       }))
       await refreshDashboard()
-    }, '设置已保存')
+    }, 'Settings saved.')
   }
 
   async function pickDirectory(onPick: (directory: string) => void): Promise<void> {
@@ -303,7 +295,7 @@ function App(): React.JSX.Element {
       await navigator.clipboard.writeText(text)
       setMessage(successMessage)
     } catch {
-      setMessage('复制失败，请检查系统剪贴板权限。')
+      setMessage('Copy failed. Check clipboard permissions and try again.')
     }
   }
 
@@ -335,7 +327,7 @@ function App(): React.JSX.Element {
         <div>
           <div className="eyebrow">Electron + Lume</div>
           <h1>Lume GUI</h1>
-          <p className="sidebar-copy">Apple Silicon 上的 macOS / Linux 虚拟机可视化控制台。</p>
+          <p className="sidebar-copy">A desktop control panel for Lume virtual machines on Apple Silicon.</p>
         </div>
 
         <nav className="nav-list">
@@ -390,7 +382,7 @@ function App(): React.JSX.Element {
               onClick={() =>
                 void runAction(
                   async () => setStatus(await window.api.restartServe()),
-                  '已重启 lume serve'
+                  'Restarted lume serve.'
                 )
               }
             >
@@ -404,13 +396,13 @@ function App(): React.JSX.Element {
         <header className="hero">
           <div>
             <div className="eyebrow">Runtime</div>
-            <h2>可视化管理虚拟机生命周期、连接信息和宿主配置。</h2>
+            <h2>Manage VM lifecycle, connection info, and local runtime preferences in one place.</h2>
           </div>
           <div className="hero-actions">
             <button
               className="secondary-button"
               disabled={busy}
-              onClick={() => void runAction(() => refreshDashboard(), '数据已刷新')}
+              onClick={() => void runAction(() => refreshDashboard(), 'Dashboard refreshed.')}
             >
               Refresh
             </button>
@@ -423,18 +415,19 @@ function App(): React.JSX.Element {
         {message ? <div className="message-banner">{message}</div> : null}
         {!status.lumeInstalled ? (
           <div className="warning-banner">
-            未检测到 `lume` 命令。界面已完成，但实际命令执行依赖本机安装的 Lume CLI。
-            {status.lastError ? ` 当前错误：${status.lastError}` : ''}
+            The `lume` command is not available. The UI can load, but VM actions require the Lume
+            CLI to be installed locally.
+            {status.lastError ? ` Current error: ${status.lastError}` : ''}
           </div>
         ) : null}
 
         {view === 'overview' ? (
           <section className="panel-grid">
-            <section className="panel span-2">
+            <section className="panel full">
               <div className="panel-header">
                 <div>
                   <div className="eyebrow">Virtual Machines</div>
-                  <h3>虚拟机列表</h3>
+                  <h3>Virtual Machine Manager</h3>
                 </div>
                 <div className="hero-actions">
                   {selectedVm ? (
@@ -443,13 +436,13 @@ function App(): React.JSX.Element {
                         className={overviewTab === 'list' ? 'subnav-tab active' : 'subnav-tab'}
                         onClick={() => setOverviewTab('list')}
                       >
-                        列表
+                        List
                       </button>
                       <button
                         className={overviewTab === 'details' ? 'subnav-tab active' : 'subnav-tab'}
                         onClick={() => setOverviewTab('details')}
                       >
-                        {selectedVm.name} 详情
+                        {selectedVm.name} Details
                       </button>
                     </div>
                   ) : null}
@@ -468,7 +461,7 @@ function App(): React.JSX.Element {
                     <span>Actions</span>
                   </div>
                   {vms.length === 0 ? (
-                    <div className="empty-state">还没有虚拟机，先创建一个。</div>
+                    <div className="empty-state">No virtual machines yet. Create one to get started.</div>
                   ) : (
                     vms.map((vm) => (
                       <div className="table-row" key={vm.name}>
@@ -510,11 +503,11 @@ function App(): React.JSX.Element {
                             className="danger-button"
                             disabled={isVmPending(vm.name)}
                             onClick={() => {
-                              if (window.confirm(`确认删除虚拟机 ${vm.name} 吗？`)) {
+                              if (window.confirm(`Delete virtual machine ${vm.name}?`)) {
                                 void mutateVm(
                                   vm.name,
                                   () => window.api.deleteVm(vm.name),
-                                  `已删除 ${vm.name}`
+                                  `Deleted ${vm.name}.`
                                 )
                               }
                             }}
@@ -529,12 +522,12 @@ function App(): React.JSX.Element {
               ) : (
                 <div className="embedded-detail">
                   {!selectedVm ? (
-                    <div className="empty-state">先从虚拟机列表中选择一个实例。</div>
+                    <div className="empty-state">Select a virtual machine from the list to inspect and edit it.</div>
                   ) : (
                     <>
                       <div className="detail-grid">
                         <div className="detail-card">
-                          <span className="muted-text">状态</span>
+                          <span className="muted-text">Status</span>
                           <StatusPill status={selectedVm.status} />
                         </div>
                         <div className="detail-card">
@@ -550,7 +543,7 @@ function App(): React.JSX.Element {
                           </strong>
                         </div>
                         <div className="detail-card">
-                          <span className="muted-text">资源</span>
+                          <span className="muted-text">Resources</span>
                           <strong>
                             {selectedVm.cpu ?? '-'} CPU / {selectedVm.memoryGb ?? '-'} GB /{' '}
                             {selectedVm.diskGb ?? '-'} GB
@@ -572,7 +565,7 @@ function App(): React.JSX.Element {
                             />
                           </label>
                           <label>
-                            内存 (GB)
+                            Memory (GB)
                             <input
                               type="number"
                               min="1"
@@ -586,7 +579,7 @@ function App(): React.JSX.Element {
                             />
                           </label>
                           <label>
-                            磁盘 (GB)
+                            Disk (GB)
                             <input
                               type="number"
                               min="10"
@@ -600,7 +593,7 @@ function App(): React.JSX.Element {
                             />
                           </label>
                           <label>
-                            分辨率
+                            Display
                             <input
                               value={selectedVmUpdate.resolution}
                               onChange={(event) =>
@@ -611,8 +604,8 @@ function App(): React.JSX.Element {
                           <div className="wide">
                             <DirectoryListEditor
                               directories={selectedVmUpdate.sharedDirectories}
-                              title="共享目录"
-                              emptyText="还没有共享目录。"
+                              title="Shared Directories"
+                              emptyText="No shared directories configured."
                               onAdd={() =>
                                 void appendDirectory(
                                   selectedVmUpdate.sharedDirectories,
@@ -645,7 +638,7 @@ function App(): React.JSX.Element {
                               setSelectedVm({ ...selectedVm, headless: event.target.checked })
                             }
                           />
-                          无头模式
+                          Headless Launch
                         </label>
                         <label className="toggle">
                           <input
@@ -655,8 +648,14 @@ function App(): React.JSX.Element {
                               setSelectedVm({ ...selectedVm, background: event.target.checked })
                             }
                           />
-                          后台运行
+                          Background Start
                         </label>
+                      </div>
+
+                      <div className="detail-note">
+                        Headless, background, and shared directory preferences are stored by this
+                        app and applied on future `lume run` actions. Lume CLI `set` does not
+                        persist them directly.
                       </div>
 
                       <div className="hero-actions">
@@ -691,7 +690,7 @@ function App(): React.JSX.Element {
                                   sharedDirectories: selectedVm.sharedDirectories,
                                   background: Boolean(selectedVm.background)
                                 }),
-                              `已更新 ${selectedVm.name}`,
+                              `Updated ${selectedVm.name}.`,
                               selectedVm.name
                             )
                           }
@@ -705,27 +704,6 @@ function App(): React.JSX.Element {
               )}
             </section>
 
-            {overviewTab === 'details' ? (
-              <section className="panel">
-                <div className="panel-header">
-                  <div>
-                    <div className="eyebrow">Logs</div>
-                    <h3>虚拟机日志</h3>
-                  </div>
-                </div>
-                <pre className="log-viewer">{logs || '暂无日志。'}</pre>
-              </section>
-            ) : null}
-
-            <section className="panel">
-              <div className="panel-header">
-                <div>
-                  <div className="eyebrow">Service Logs</div>
-                  <h3>lume serve</h3>
-                </div>
-              </div>
-              <pre className="log-viewer">{status.serveLogs || '暂无日志输出。'}</pre>
-            </section>
           </section>
         ) : null}
 
@@ -735,22 +713,24 @@ function App(): React.JSX.Element {
               <div className="panel-header">
                 <div>
                   <div className="eyebrow">Create</div>
-                  <h3>创建虚拟机</h3>
+                  <h3>Create Virtual Machine</h3>
                 </div>
               </div>
               {hasDuplicateVmName && vmForm.name.trim() ? (
-                <div className="warning-banner">已存在同名虚拟机，请更换名称后再创建。</div>
+                <div className="warning-banner">
+                  A virtual machine with this name already exists. Choose a different name.
+                </div>
               ) : null}
               <div className="form-grid">
                 <label>
-                  名称
+                  Name
                   <input
                     value={vmForm.name}
                     onChange={(event) => setVmForm({ ...vmForm, name: event.target.value })}
                   />
                 </label>
                 <label>
-                  操作系统
+                  Operating System
                   <select
                     value={vmForm.os}
                     onChange={(event) =>
@@ -771,7 +751,7 @@ function App(): React.JSX.Element {
                   />
                 </label>
                 <label>
-                  内存 (GB)
+                  Memory (GB)
                   <input
                     type="number"
                     min="1"
@@ -782,7 +762,7 @@ function App(): React.JSX.Element {
                   />
                 </label>
                 <label>
-                  磁盘 (GB)
+                  Disk (GB)
                   <input
                     type="number"
                     min="10"
@@ -793,7 +773,7 @@ function App(): React.JSX.Element {
                   />
                 </label>
                 <label>
-                  分辨率
+                  Display
                   <input
                     value={vmForm.resolution}
                     onChange={(event) => setVmForm({ ...vmForm, resolution: event.target.value })}
@@ -802,7 +782,7 @@ function App(): React.JSX.Element {
                 {vmForm.os === 'macOS' ? (
                   <>
                     <label>
-                      IPSW 来源
+                      IPSW Source
                       <select
                         value={vmForm.ipswSource}
                         onChange={(event) =>
@@ -812,12 +792,12 @@ function App(): React.JSX.Element {
                           })
                         }
                       >
-                        <option value="latest">让 Lume 自动下载 latest</option>
-                        <option value="local">使用本地 IPSW 文件</option>
+                        <option value="latest">Let Lume download the latest image</option>
+                        <option value="local">Use a local IPSW file</option>
                       </select>
                     </label>
                     <label>
-                      无人值守安装
+                      Unattended Setup
                       <select
                         value={vmForm.unattendedEnabled ? 'enabled' : 'disabled'}
                         onChange={(event) =>
@@ -827,14 +807,14 @@ function App(): React.JSX.Element {
                           })
                         }
                       >
-                        <option value="disabled">关闭</option>
-                        <option value="enabled">启用 unattended</option>
+                        <option value="disabled">Disabled</option>
+                        <option value="enabled">Enabled</option>
                       </select>
                     </label>
                   </>
                 ) : null}
                 <label>
-                  网络模式
+                  Network Mode
                   <select
                     value={vmForm.networkMode}
                     onChange={(event) =>
@@ -845,11 +825,11 @@ function App(): React.JSX.Element {
                     }
                   >
                     <option value="nat">NAT</option>
-                    <option value="bridged">桥接</option>
+                    <option value="bridged">Bridged</option>
                   </select>
                 </label>
                 <label className="wide">
-                  存储路径
+                  Storage Path
                   <div className="input-row">
                     <input
                       value={vmForm.storagePath}
@@ -872,7 +852,7 @@ function App(): React.JSX.Element {
                 </label>
                 {vmForm.os === 'macOS' && vmForm.ipswSource === 'local' ? (
                   <label className="wide">
-                    本地 IPSW 文件
+                    Local IPSW File
                     <div className="input-row">
                       <input value={vmForm.ipswPath} readOnly />
                       <button
@@ -892,7 +872,7 @@ function App(): React.JSX.Element {
                 {vmForm.os === 'macOS' && vmForm.unattendedEnabled ? (
                   <>
                     <label>
-                      unattended 模式
+                      Unattended Mode
                       <select
                         value={vmForm.unattendedMode}
                         onChange={(event) =>
@@ -902,8 +882,8 @@ function App(): React.JSX.Element {
                           })
                         }
                       >
-                        <option value="preset">内置 preset</option>
-                        <option value="file">本地 YAML 文件</option>
+                        <option value="preset">Built-in preset</option>
+                        <option value="file">Local YAML file</option>
                       </select>
                     </label>
                     {vmForm.unattendedMode === 'preset' ? (
@@ -944,8 +924,8 @@ function App(): React.JSX.Element {
                 <div className="wide">
                   <DirectoryListEditor
                     directories={vmForm.sharedDirectories}
-                    title="共享目录"
-                    emptyText="还没有共享目录。"
+                    title="Shared Directories"
+                    emptyText="No shared directories configured."
                     onAdd={() =>
                       void appendDirectory(vmForm.sharedDirectories, (sharedDirectories) =>
                         setVmForm({ ...vmForm, sharedDirectories })
@@ -969,7 +949,7 @@ function App(): React.JSX.Element {
                     checked={vmForm.headless}
                     onChange={(event) => setVmForm({ ...vmForm, headless: event.target.checked })}
                   />
-                  无头模式
+                  Headless Launch
                 </label>
                 <label className="toggle">
                   <input
@@ -977,7 +957,7 @@ function App(): React.JSX.Element {
                     checked={vmForm.background}
                     onChange={(event) => setVmForm({ ...vmForm, background: event.target.checked })}
                   />
-                  后台运行
+                  Background Start
                 </label>
               </div>
               <div className="command-preview-block">
@@ -987,7 +967,7 @@ function App(): React.JSX.Element {
                     className="ghost-button"
                     type="button"
                     onClick={() =>
-                      void copyToClipboard(createCommandPreview, '创建命令已复制到剪贴板')
+                      void copyToClipboard(createCommandPreview, 'Create command copied to clipboard.')
                     }
                   >
                     Copy
@@ -1018,7 +998,7 @@ function App(): React.JSX.Element {
                     void mutateVm(
                       vmForm.name,
                       async () => window.api.createVm(vmForm),
-                      `已创建 ${vmForm.name}`,
+                      `Created ${vmForm.name}.`,
                       vmForm.name
                     ).then(() => {
                       setView('overview')
@@ -1039,12 +1019,12 @@ function App(): React.JSX.Element {
               <div className="panel-header">
                 <div>
                   <div className="eyebrow">Settings</div>
-                  <h3>全局配置</h3>
+                  <h3>Global Preferences</h3>
                 </div>
               </div>
               <div className="form-grid">
                 <label className="wide">
-                  默认存储路径
+                  Default Storage Path
                   <div className="input-row">
                     <input
                       value={settings.defaultStoragePath}
@@ -1066,7 +1046,7 @@ function App(): React.JSX.Element {
                   </div>
                 </label>
                 <label>
-                  默认分辨率
+                  Default Display
                   <input
                     value={settings.defaultResolution}
                     onChange={(event) =>
@@ -1077,8 +1057,8 @@ function App(): React.JSX.Element {
                 <div className="wide">
                   <DirectoryListEditor
                     directories={settings.sharedDirectories}
-                    title="默认共享目录"
-                    emptyText="还没有默认共享目录。"
+                    title="Default Shared Directories"
+                    emptyText="No default shared directories configured."
                     onAdd={() =>
                       void appendDirectory(settings.sharedDirectories, (sharedDirectories) =>
                         setSettings({ ...settings, sharedDirectories })
@@ -1104,7 +1084,7 @@ function App(): React.JSX.Element {
                       setSettings({ ...settings, defaultHeadless: event.target.checked })
                     }
                   />
-                  默认无头模式
+                  Default Headless Launch
                 </label>
                 <label className="toggle">
                   <input
@@ -1114,7 +1094,7 @@ function App(): React.JSX.Element {
                       setSettings({ ...settings, autoStartServe: event.target.checked })
                     }
                   />
-                  启动时自动运行 lume serve
+                  Start `lume serve` on app launch
                 </label>
                 <label className="toggle">
                   <input
@@ -1124,7 +1104,7 @@ function App(): React.JSX.Element {
                       setSettings({ ...settings, backgroundMode: event.target.checked })
                     }
                   />
-                  关闭窗口后继续后台运行
+                  Keep the app running in the background after closing the window
                 </label>
                 <label className="toggle">
                   <input
@@ -1134,7 +1114,7 @@ function App(): React.JSX.Element {
                       setSettings({ ...settings, startAtLogin: event.target.checked })
                     }
                   />
-                  开机自启
+                  Launch at login
                 </label>
                 <label className="toggle">
                   <input
@@ -1144,7 +1124,7 @@ function App(): React.JSX.Element {
                       setSettings({ ...settings, allowAutoUpdate: event.target.checked })
                     }
                   />
-                  允许自动更新 lume
+                  Allow automatic Lume updates
                 </label>
               </div>
               <div className="hero-actions">
