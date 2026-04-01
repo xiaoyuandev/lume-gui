@@ -20,6 +20,10 @@ type ExecOutcome = {
   code: number
 }
 
+type RunOptions = {
+  timeout?: number
+}
+
 function toVmStatus(value: string | undefined): VmStatus {
   const normalized = (value ?? '').toLowerCase()
   if (normalized.includes('running')) return 'running'
@@ -184,10 +188,10 @@ export class LumeManager {
     this.serveLogs = `${this.serveLogs}${chunk}`.slice(-12000)
   }
 
-  async run(args: string[]): Promise<ExecOutcome> {
+  async run(args: string[], options?: RunOptions): Promise<ExecOutcome> {
     try {
       const { stdout, stderr } = await execFileAsync('lume', args, {
-        timeout: 120000,
+        timeout: options?.timeout ?? 120000,
         maxBuffer: 1024 * 1024 * 8
       })
       return { stdout, stderr, code: 0 }
@@ -287,8 +291,36 @@ export class LumeManager {
 
   async startVm(name: string): Promise<CommandResult> {
     const command = ['run', name]
-    const result = await this.run(command)
-    return { success: result.code === 0, command: ['lume', ...command], ...result }
+    try {
+      const child = spawn('lume', command, {
+        detached: true,
+        stdio: 'ignore'
+      })
+      child.unref()
+
+      return {
+        success: true,
+        command: ['lume', ...command],
+        stdout: `lume run ${name} started in detached mode`,
+        stderr: '',
+        code: 0
+      }
+    } catch (error) {
+      const spawnError = error as NodeJS.ErrnoException
+      if (spawnError.code === 'ENOENT') {
+        this.lastError = '未找到 lume 命令，请先安装并确保其在 PATH 中可访问。'
+      } else {
+        this.lastError = spawnError.message
+      }
+
+      return {
+        success: false,
+        command: ['lume', ...command],
+        stdout: '',
+        stderr: spawnError.message,
+        code: 1
+      }
+    }
   }
 
   async stopVm(name: string): Promise<CommandResult> {
@@ -298,7 +330,7 @@ export class LumeManager {
   }
 
   async deleteVm(name: string): Promise<CommandResult> {
-    const command = ['delete', name, '--yes']
+    const command = ['delete', name, '--force']
     const result = await this.run(command)
     return { success: result.code === 0, command: ['lume', ...command], ...result }
   }

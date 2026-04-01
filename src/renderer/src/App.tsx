@@ -51,6 +51,45 @@ function StatusPill({ status }: { status: VmSummary['status'] }): React.JSX.Elem
   return <span className={`status-pill status-${status}`}>{status}</span>
 }
 
+function DirectoryListEditor({
+  directories,
+  title,
+  emptyText,
+  onAdd,
+  onRemove
+}: {
+  directories: string[]
+  title: string
+  emptyText: string
+  onAdd: () => void
+  onRemove: (directory: string) => void
+}): React.JSX.Element {
+  return (
+    <div className="directory-editor">
+      <div className="directory-header">
+        <span>{title}</span>
+        <button className="ghost-button" type="button" onClick={onAdd}>
+          Add Directory
+        </button>
+      </div>
+      {directories.length === 0 ? (
+        <div className="empty-state compact">{emptyText}</div>
+      ) : (
+        <div className="directory-list">
+          {directories.map((directory) => (
+            <div className="directory-item" key={directory}>
+              <span>{directory}</span>
+              <button className="danger-button" type="button" onClick={() => onRemove(directory)}>
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function App(): React.JSX.Element {
   const [view, setView] = useState<View>('overview')
   const [status, setStatus] = useState<AppStatus>(emptyStatus)
@@ -62,6 +101,7 @@ function App(): React.JSX.Element {
   const [logs, setLogs] = useState('')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [pendingVmNames, setPendingVmNames] = useState<string[]>([])
   const [message, setMessage] = useState('')
 
   const runningCount = useMemo(() => vms.filter((vm) => vm.status === 'running').length, [vms])
@@ -121,6 +161,19 @@ function App(): React.JSX.Element {
     }
   }
 
+  function setVmPending(name: string, active: boolean): void {
+    setPendingVmNames((current) => {
+      if (active) {
+        return current.includes(name) ? current : [...current, name]
+      }
+      return current.filter((entry) => entry !== name)
+    })
+  }
+
+  function isVmPending(name: string): boolean {
+    return pendingVmNames.includes(name)
+  }
+
   async function openVmDetails(name: string): Promise<void> {
     setView('details')
     await runAction(async () => {
@@ -132,17 +185,25 @@ function App(): React.JSX.Element {
   }
 
   async function mutateVm(
+    vmName: string,
     action: () => Promise<{ success: boolean; stderr: string; stdout: string }>,
     successMessage: string,
     selectedName?: string
   ): Promise<void> {
-    await runAction(async () => {
+    setVmPending(vmName, true)
+    setMessage('')
+    try {
       const result = await action()
       if (!result.success) {
         throw new Error(result.stderr || result.stdout || '命令执行失败')
       }
       await refreshDashboard(selectedName)
-    }, successMessage)
+      setMessage(successMessage)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '操作失败')
+    } finally {
+      setVmPending(vmName, false)
+    }
   }
 
   async function saveAppSettings(): Promise<void> {
@@ -164,6 +225,16 @@ function App(): React.JSX.Element {
     onPick(directory)
   }
 
+  async function appendDirectory(
+    current: string[],
+    onChange: (directories: string[]) => void
+  ): Promise<void> {
+    await pickDirectory((directory) => {
+      if (current.includes(directory)) return
+      onChange([...current, directory])
+    })
+  }
+
   if (loading) {
     return <div className="loading-screen">Loading Lume GUI...</div>
   }
@@ -180,6 +251,7 @@ function App(): React.JSX.Element {
         background: Boolean(selectedVm.background)
       }
     : null
+  const selectedVmBusy = selectedVm ? isVmPending(selectedVm.name) : false
 
   return (
     <div className="app-shell">
@@ -320,7 +392,7 @@ function App(): React.JSX.Element {
                       <div className="action-row">
                         <button
                           className="ghost-button"
-                          disabled={busy}
+                          disabled={isVmPending(vm.name)}
                           onClick={() => void openVmDetails(vm.name)}
                         >
                           Details
@@ -328,9 +400,10 @@ function App(): React.JSX.Element {
                         {vm.status === 'running' ? (
                           <button
                             className="secondary-button"
-                            disabled={busy}
+                            disabled={isVmPending(vm.name)}
                             onClick={() =>
                               void mutateVm(
+                                vm.name,
                                 () => window.api.stopVm(vm.name),
                                 `已停止 ${vm.name}`,
                                 vm.name
@@ -342,9 +415,10 @@ function App(): React.JSX.Element {
                         ) : (
                           <button
                             className="primary-button"
-                            disabled={busy}
+                            disabled={isVmPending(vm.name)}
                             onClick={() =>
                               void mutateVm(
+                                vm.name,
                                 () => window.api.startVm(vm.name),
                                 `已启动 ${vm.name}`,
                                 vm.name
@@ -356,10 +430,14 @@ function App(): React.JSX.Element {
                         )}
                         <button
                           className="danger-button"
-                          disabled={busy}
+                          disabled={isVmPending(vm.name)}
                           onClick={() => {
                             if (window.confirm(`确认删除虚拟机 ${vm.name} 吗？`)) {
-                              void mutateVm(() => window.api.deleteVm(vm.name), `已删除 ${vm.name}`)
+                              void mutateVm(
+                                vm.name,
+                                () => window.api.deleteVm(vm.name),
+                                `已删除 ${vm.name}`
+                              )
                             }
                           }}
                         >
@@ -519,22 +597,26 @@ function App(): React.JSX.Element {
                     </button>
                   </div>
                 </label>
-                <label className="wide">
-                  共享目录
-                  <textarea
-                    rows={4}
-                    value={vmForm.sharedDirectories.join('\n')}
-                    onChange={(event) =>
+                <div className="wide">
+                  <DirectoryListEditor
+                    directories={vmForm.sharedDirectories}
+                    title="共享目录"
+                    emptyText="还没有共享目录。"
+                    onAdd={() =>
+                      void appendDirectory(vmForm.sharedDirectories, (sharedDirectories) =>
+                        setVmForm({ ...vmForm, sharedDirectories })
+                      )
+                    }
+                    onRemove={(directory) =>
                       setVmForm({
                         ...vmForm,
-                        sharedDirectories: event.target.value
-                          .split('\n')
-                          .map((entry) => entry.trim())
-                          .filter(Boolean)
+                        sharedDirectories: vmForm.sharedDirectories.filter(
+                          (entry) => entry !== directory
+                        )
                       })
                     }
                   />
-                </label>
+                </div>
               </div>
               <div className="toggle-row">
                 <label className="toggle">
@@ -567,6 +649,7 @@ function App(): React.JSX.Element {
                   disabled={busy || !vmForm.name.trim()}
                   onClick={() =>
                     void mutateVm(
+                      vmForm.name,
                       async () => window.api.createVm(vmForm),
                       `已创建 ${vmForm.name}`,
                       vmForm.name
@@ -693,22 +776,31 @@ function App(): React.JSX.Element {
                           }
                         />
                       </label>
-                      <label className="wide">
-                        共享目录
-                        <textarea
-                          rows={3}
-                          value={selectedVmUpdate.sharedDirectories.join('\n')}
-                          onChange={(event) =>
+                      <div className="wide">
+                        <DirectoryListEditor
+                          directories={selectedVmUpdate.sharedDirectories}
+                          title="共享目录"
+                          emptyText="还没有共享目录。"
+                          onAdd={() =>
+                            void appendDirectory(
+                              selectedVmUpdate.sharedDirectories,
+                              (sharedDirectories) =>
+                                setSelectedVm({
+                                  ...selectedVm,
+                                  sharedDirectories
+                                })
+                            )
+                          }
+                          onRemove={(directory) =>
                             setSelectedVm({
                               ...selectedVm,
-                              sharedDirectories: event.target.value
-                                .split('\n')
-                                .map((entry) => entry.trim())
-                                .filter(Boolean)
+                              sharedDirectories: selectedVmUpdate.sharedDirectories.filter(
+                                (entry) => entry !== directory
+                              )
                             })
                           }
                         />
-                      </label>
+                      </div>
                     </div>
                   ) : null}
 
@@ -738,9 +830,10 @@ function App(): React.JSX.Element {
                   <div className="hero-actions">
                     <button
                       className="secondary-button"
-                      disabled={busy}
+                      disabled={selectedVmBusy}
                       onClick={() =>
                         void mutateVm(
+                          selectedVm.name,
                           () => window.api.stopVm(selectedVm.name),
                           `已停止 ${selectedVm.name}`,
                           selectedVm.name
@@ -751,9 +844,10 @@ function App(): React.JSX.Element {
                     </button>
                     <button
                       className="primary-button"
-                      disabled={busy}
+                      disabled={selectedVmBusy}
                       onClick={() =>
                         void mutateVm(
+                          selectedVm.name,
                           () => window.api.startVm(selectedVm.name),
                           `已启动 ${selectedVm.name}`,
                           selectedVm.name
@@ -764,9 +858,10 @@ function App(): React.JSX.Element {
                     </button>
                     <button
                       className="ghost-button"
-                      disabled={busy}
+                      disabled={selectedVmBusy}
                       onClick={() =>
                         void mutateVm(
+                          selectedVm.name,
                           () =>
                             window.api.updateVm({
                               name: selectedVm.name,
@@ -843,22 +938,26 @@ function App(): React.JSX.Element {
                     }
                   />
                 </label>
-                <label className="wide">
-                  默认共享目录
-                  <textarea
-                    rows={4}
-                    value={settings.sharedDirectories.join('\n')}
-                    onChange={(event) =>
+                <div className="wide">
+                  <DirectoryListEditor
+                    directories={settings.sharedDirectories}
+                    title="默认共享目录"
+                    emptyText="还没有默认共享目录。"
+                    onAdd={() =>
+                      void appendDirectory(settings.sharedDirectories, (sharedDirectories) =>
+                        setSettings({ ...settings, sharedDirectories })
+                      )
+                    }
+                    onRemove={(directory) =>
                       setSettings({
                         ...settings,
-                        sharedDirectories: event.target.value
-                          .split('\n')
-                          .map((entry) => entry.trim())
-                          .filter(Boolean)
+                        sharedDirectories: settings.sharedDirectories.filter(
+                          (entry) => entry !== directory
+                        )
                       })
                     }
                   />
-                </label>
+                </div>
               </div>
               <div className="toggle-grid">
                 <label className="toggle">

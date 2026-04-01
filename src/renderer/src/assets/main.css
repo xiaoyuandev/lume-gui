@@ -281,6 +281,10 @@ textarea {
   color: var(--text-muted);
 }
 
+.empty-state.compact {
+  padding: 16px;
+}
+
 .status-pill {
   display: inline-flex;
   justify-content: center;
@@ -389,6 +393,41 @@ textarea {
   gap: 14px;
 }
 
+.directory-editor {
+  display: grid;
+  gap: 12px;
+}
+
+.directory-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-weight: 600;
+}
+
+.directory-list {
+  display: grid;
+  gap: 10px;
+}
+
+.directory-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: var(--surface-strong);
+  overflow: hidden;
+}
+
+.directory-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .command-preview,
 .message-banner,
 .warning-banner {
@@ -489,7 +528,9 @@ textarea {
   .hero-actions,
   .action-row,
   .input-row,
-  .toggle-row {
+  .toggle-row,
+  .directory-header,
+  .directory-item {
     flex-direction: column;
     align-items: stretch;
   }
