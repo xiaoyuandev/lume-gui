@@ -1,4 +1,14 @@
-import { app, shell, BrowserWindow, ipcMain, Tray, Menu, nativeImage, dialog } from 'electron'
+import {
+  app,
+  shell,
+  BrowserWindow,
+  ipcMain,
+  Tray,
+  Menu,
+  nativeImage,
+  dialog,
+  type OpenDialogOptions
+} from 'electron'
 import { join } from 'node:path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -121,6 +131,19 @@ function registerIpcHandlers(): void {
         })
     return result.canceled ? null : (result.filePaths[0] ?? null)
   })
+  ipcMain.handle(
+    'dialog:chooseFile',
+    async (_, filters?: { name: string; extensions: string[] }[]) => {
+      const options: OpenDialogOptions = {
+        properties: ['openFile'],
+        filters
+      }
+      const result = mainWindow
+        ? await dialog.showOpenDialog(mainWindow, options)
+        : await dialog.showOpenDialog(options)
+      return result.canceled ? null : (result.filePaths[0] ?? null)
+    }
+  )
 }
 
 app.whenReady().then(() => {

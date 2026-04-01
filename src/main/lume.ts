@@ -1,5 +1,6 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { promisify } from 'node:util'
+import { buildCreateArgs } from '../shared/create-command'
 import type {
   AppStatus,
   CommandResult,
@@ -51,6 +52,40 @@ function toNumber(value: unknown): number | null {
   return null
 }
 
+function bytesToGigabytes(value: unknown): number | null {
+  const bytes = toNumber(value)
+  if (bytes === null) return null
+  return Number((bytes / 1024 / 1024 / 1024).toFixed(2))
+}
+
+function toDiskGb(value: unknown): number | null {
+  if (typeof value === 'object' && value !== null) {
+    const total = (value as Record<string, unknown>)['total']
+    return bytesToGigabytes(total)
+  }
+  return toNumber(value)
+}
+
+function parseVncUrl(value: unknown): { host: string | null; port: number | null } {
+  if (typeof value !== 'string' || !value.trim()) {
+    return { host: null, port: null }
+  }
+
+  try {
+    const url = new URL(value)
+    return {
+      host: url.hostname || null,
+      port: url.port ? Number(url.port) : null
+    }
+  } catch {
+    const matched = value.match(/([^:]+):(\d+)/)
+    return {
+      host: matched?.[1] ?? null,
+      port: matched?.[2] ? Number(matched[2]) : null
+    }
+  }
+}
+
 function parseJson<T>(value: string): T | null {
   try {
     return JSON.parse(value) as T
@@ -60,39 +95,24 @@ function parseJson<T>(value: string): T | null {
 }
 
 function summarizeVm(raw: Record<string, unknown>): VmSummary {
-  const vnc =
-    typeof raw['vnc'] === 'object' && raw['vnc'] !== null
-      ? (raw['vnc'] as Record<string, unknown>)
-      : null
-  const ssh =
-    typeof raw['ssh'] === 'object' && raw['ssh'] !== null
-      ? (raw['ssh'] as Record<string, unknown>)
-      : null
+  const { host: vncHost, port: vncPort } = parseVncUrl(raw['vncUrl'])
+  const sshAvailable = typeof raw['sshAvailable'] === 'string' ? raw['sshAvailable'] : null
+  const sshPort = sshAvailable?.match(/:(\d+)$/)?.[1]
 
   return {
     name: String(raw['name'] ?? raw['vm'] ?? 'unknown'),
     status: toVmStatus(String(raw['status'] ?? raw['state'] ?? 'unknown')),
     os: toVmOs(raw['os'] ?? raw['platform']),
-    cpu: toNumber(raw['cpu'] ?? raw['cpus']),
-    memoryGb: toNumber(raw['memory'] ?? raw['memoryGb'] ?? raw['ram']),
-    diskGb: toNumber(raw['disk'] ?? raw['diskGb'] ?? raw['storage']),
-    ipAddress:
-      typeof raw['ip'] === 'string'
-        ? raw['ip']
-        : typeof ssh?.['host'] === 'string'
-          ? String(ssh.host)
-          : null,
-    sshPort: toNumber(raw['sshPort'] ?? ssh?.['port']),
-    vncHost:
-      typeof raw['vncHost'] === 'string'
-        ? raw['vncHost']
-        : typeof vnc?.['host'] === 'string'
-          ? String(vnc.host)
-          : null,
-    vncPort: toNumber(raw['vncPort'] ?? vnc?.['port']),
+    cpu: toNumber(raw['cpuCount'] ?? raw['cpu'] ?? raw['cpus']),
+    memoryGb: bytesToGigabytes(raw['memorySize'] ?? raw['memory'] ?? raw['memoryGb'] ?? raw['ram']),
+    diskGb: toDiskGb(raw['diskSize'] ?? raw['disk'] ?? raw['diskGb'] ?? raw['storage']),
+    ipAddress: typeof raw['ipAddress'] === 'string' ? raw['ipAddress'] : null,
+    sshPort: sshPort ? Number(sshPort) : null,
+    vncHost,
+    vncPort,
     storagePath:
-      typeof raw['path'] === 'string'
-        ? raw['path']
+      typeof raw['locationName'] === 'string'
+        ? raw['locationName']
         : typeof raw['storagePath'] === 'string'
           ? String(raw['storagePath'])
           : null
@@ -130,53 +150,30 @@ function parseKeyValue(stdout: string): Record<string, unknown> {
   }, {})
 }
 
-function buildCreateArgs(input: CreateVmInput): string[] {
-  const args = [
-    'create',
-    input.name,
-    '--os',
-    input.os.toLowerCase(),
-    '--cpu',
-    String(input.cpu),
-    '--memory',
-    `${input.memoryGb}G`,
-    '--disk',
-    `${input.diskGb}G`,
-    '--resolution',
-    input.resolution,
-    '--network',
-    input.networkMode,
-    '--storage',
-    input.storagePath
-  ]
-
-  if (input.os === 'macOS' && input.macOsVersion.trim()) {
-    args.push('--macos-version', input.macOsVersion.trim())
-  }
-  if (input.headless) args.push('--headless')
-  if (input.background) args.push('--background')
-  input.sharedDirectories.forEach((directory) => args.push('--shared-dir', directory))
-  return args
-}
-
 function buildUpdateArgs(input: UpdateVmInput): string[] {
   const args = [
-    'config',
+    'set',
     input.name,
     '--cpu',
     String(input.cpu),
     '--memory',
-    `${input.memoryGb}G`,
-    '--disk',
-    `${input.diskGb}G`,
-    '--resolution',
+    String(input.memoryGb),
+    '--disk-size',
+    String(input.diskGb),
+    '--display',
     input.resolution
   ]
 
-  args.push(input.headless ? '--headless' : '--headful')
-  args.push(input.background ? '--background' : '--foreground')
-  input.sharedDirectories.forEach((directory) => args.push('--shared-dir', directory))
   return args
+}
+
+function parseVmArray(stdout: string): Record<string, unknown>[] {
+  const parsed = parseJson<unknown>(stdout)
+  if (!Array.isArray(parsed)) return []
+
+  return parsed.filter(
+    (entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null
+  )
 }
 
 export class LumeManager {
@@ -227,16 +224,9 @@ export class LumeManager {
   }
 
   async listVms(): Promise<VmSummary[]> {
-    const jsonResult = await this.run(['ls', '--json'])
+    const jsonResult = await this.run(['ls', '--format', 'json'])
     if (jsonResult.code === 0) {
-      const parsed = parseJson<unknown>(jsonResult.stdout)
-      if (Array.isArray(parsed)) {
-        return parsed
-          .filter(
-            (entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null
-          )
-          .map(summarizeVm)
-      }
+      return parseVmArray(jsonResult.stdout).map(summarizeVm)
     }
 
     const result = await this.run(['ls'])
@@ -244,18 +234,18 @@ export class LumeManager {
   }
 
   async getVm(name: string): Promise<VmDetail> {
-    const jsonResult = await this.run(['get', name, '--json'])
+    const jsonResult = await this.run(['get', name, '--format', 'json'])
     if (jsonResult.code === 0) {
-      const parsed = parseJson<Record<string, unknown>>(jsonResult.stdout)
+      const parsed = parseVmArray(jsonResult.stdout)[0]
       if (parsed) {
         const summary = summarizeVm(parsed)
         return {
           ...summary,
           config: parsed,
           raw: jsonResult.stdout,
-          resolution: String(parsed['resolution'] ?? ''),
-          headless: Boolean(parsed['headless']),
-          background: Boolean(parsed['background']),
+          resolution: typeof parsed['display'] === 'string' ? String(parsed['display']) : null,
+          headless: false,
+          background: false,
           sharedDirectories: Array.isArray(parsed['sharedDirectories'])
             ? parsed['sharedDirectories'].map((entry) => String(entry))
             : []
@@ -264,26 +254,33 @@ export class LumeManager {
     }
 
     const result = await this.run(['get', name])
+    const vmFromTable = parseTabularVmList(result.stdout).find((entry) => entry.name === name)
     const config = parseKeyValue(result.stdout)
-    const summary = summarizeVm({ name, ...config })
+    const summary = vmFromTable ?? summarizeVm({ name, ...config })
     return {
       ...summary,
       config,
       raw: result.stdout,
-      resolution: typeof config['Resolution'] === 'string' ? String(config['Resolution']) : null,
-      headless: String(config['Headless'] ?? '').toLowerCase() === 'true',
-      background: String(config['Background'] ?? '').toLowerCase() === 'true',
-      sharedDirectories:
-        typeof config['Shared Dirs'] === 'string'
-          ? String(config['Shared Dirs'])
-              .split(',')
-              .map((entry) => entry.trim())
-              .filter(Boolean)
-          : []
+      resolution: typeof config['display'] === 'string' ? String(config['display']) : null,
+      headless: false,
+      background: false,
+      sharedDirectories: []
     }
   }
 
   async createVm(input: CreateVmInput): Promise<CommandResult> {
+    const existingVms = await this.listVms()
+    const normalizedName = input.name.trim().toLowerCase()
+    if (existingVms.some((vm) => vm.name.trim().toLowerCase() === normalizedName)) {
+      return {
+        success: false,
+        command: ['lume', ...buildCreateArgs(input)],
+        stdout: '',
+        stderr: `虚拟机 ${input.name.trim()} 已存在，请更换名称。`,
+        code: 1
+      }
+    }
+
     const command = buildCreateArgs(input)
     const result = await this.run(command)
     return { success: result.code === 0, command: ['lume', ...command], ...result }
@@ -342,7 +339,7 @@ export class LumeManager {
   }
 
   async listImages(): Promise<ImageSummary[]> {
-    const jsonResult = await this.run(['images', 'list', '--json'])
+    const jsonResult = await this.run(['images', '--format', 'json'])
     if (jsonResult.code === 0) {
       const parsed = parseJson<unknown>(jsonResult.stdout)
       if (Array.isArray(parsed)) {

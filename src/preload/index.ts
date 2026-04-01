@@ -16,6 +16,7 @@ const api: LumeApi = {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (input: AppSettings) => ipcRenderer.invoke('settings:save', input),
   chooseDirectory: () => ipcRenderer.invoke('dialog:chooseDirectory'),
+  chooseFile: (filters) => ipcRenderer.invoke('dialog:chooseFile', filters),
   restartServe: () => ipcRenderer.invoke('lume:restartServe')
 }
 

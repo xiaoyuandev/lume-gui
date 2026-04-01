@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
+import { buildCreateCommandPreview } from '../../shared/create-command'
 import type {
   AppSettings,
   AppStatus,
   CreateVmInput,
   UpdateVmInput,
   VmDetail,
-  VmSummary,
-  ImageSummary
+  VmSummary
 } from '../../shared/types'
 
-type View = 'overview' | 'create' | 'details' | 'settings'
+type View = 'overview' | 'create' | 'settings'
+type OverviewTab = 'list' | 'details'
 
 const emptyStatus: AppStatus = {
   lumeInstalled: false,
@@ -38,7 +39,12 @@ function createInitialForm(settings: AppSettings): CreateVmInput {
     memoryGb: 8,
     diskGb: 50,
     resolution: settings.defaultResolution,
-    macOsVersion: 'latest',
+    ipswSource: 'latest',
+    ipswPath: '',
+    unattendedEnabled: false,
+    unattendedMode: 'preset',
+    unattendedPreset: 'sequoia',
+    unattendedFilePath: '',
     networkMode: 'nat',
     storagePath: settings.defaultStoragePath,
     headless: settings.defaultHeadless,
@@ -92,11 +98,11 @@ function DirectoryListEditor({
 
 function App(): React.JSX.Element {
   const [view, setView] = useState<View>('overview')
+  const [overviewTab, setOverviewTab] = useState<OverviewTab>('list')
   const [status, setStatus] = useState<AppStatus>(emptyStatus)
   const [settings, setSettings] = useState<AppSettings>(emptySettings)
   const [vmForm, setVmForm] = useState<CreateVmInput>(createInitialForm(emptySettings))
   const [vms, setVms] = useState<VmSummary[]>([])
-  const [images, setImages] = useState<ImageSummary[]>([])
   const [selectedVm, setSelectedVm] = useState<VmDetail | null>(null)
   const [logs, setLogs] = useState('')
   const [loading, setLoading] = useState(true)
@@ -107,14 +113,9 @@ function App(): React.JSX.Element {
   const runningCount = useMemo(() => vms.filter((vm) => vm.status === 'running').length, [vms])
 
   async function refreshDashboard(selectedName?: string): Promise<void> {
-    const [nextStatus, nextVms, nextImages] = await Promise.all([
-      window.api.getStatus(),
-      window.api.listVms(),
-      window.api.listImages()
-    ])
+    const [nextStatus, nextVms] = await Promise.all([window.api.getStatus(), window.api.listVms()])
     setStatus(nextStatus)
     setVms(nextVms)
-    setImages(nextImages)
 
     const targetVm = selectedName ?? selectedVm?.name
     if (!targetVm) return
@@ -133,17 +134,15 @@ function App(): React.JSX.Element {
   useEffect(() => {
     void (async () => {
       const nextSettings = await window.api.getSettings()
-      const [nextStatus, nextVms, nextImages] = await Promise.all([
+      const [nextStatus, nextVms] = await Promise.all([
         window.api.getStatus(),
-        window.api.listVms(),
-        window.api.listImages()
+        window.api.listVms()
       ])
 
       setSettings(nextSettings)
       setVmForm(createInitialForm(nextSettings))
       setStatus(nextStatus)
       setVms(nextVms)
-      setImages(nextImages)
       setLoading(false)
     })()
   }, [])
@@ -174,8 +173,41 @@ function App(): React.JSX.Element {
     return pendingVmNames.includes(name)
   }
 
+  function patchVm(name: string, updater: (vm: VmSummary) => VmSummary): void {
+    setVms((current) => current.map((vm) => (vm.name === name ? updater(vm) : vm)))
+    setSelectedVm((current) =>
+      current && current.name === name ? { ...current, ...updater(current) } : current
+    )
+  }
+
+  async function refreshVmStatus(name: string, attempts = 12, intervalMs = 1500): Promise<void> {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const nextVms = await window.api.listVms()
+      setVms(nextVms)
+
+      const vm = nextVms.find((entry) => entry.name === name)
+      if (vm) {
+        if (selectedVm?.name === name) {
+          const detail = await window.api.getVm(name)
+          const vmLogs = await window.api.getVmLogs(name)
+          setSelectedVm({ ...detail, logs: vmLogs })
+          setLogs(vmLogs)
+        }
+
+        if (vm.status !== 'starting' && vm.status !== 'stopping') {
+          return
+        }
+      }
+
+      await new Promise((resolve) => window.setTimeout(resolve, intervalMs))
+    }
+
+    await refreshDashboard(name)
+  }
+
   async function openVmDetails(name: string): Promise<void> {
-    setView('details')
+    setView('overview')
+    setOverviewTab('details')
     await runAction(async () => {
       const detail = await window.api.getVm(name)
       const vmLogs = await window.api.getVmLogs(name)
@@ -189,7 +221,7 @@ function App(): React.JSX.Element {
     action: () => Promise<{ success: boolean; stderr: string; stdout: string }>,
     successMessage: string,
     selectedName?: string
-  ): Promise<void> {
+  ): Promise<boolean> {
     setVmPending(vmName, true)
     setMessage('')
     try {
@@ -199,11 +231,33 @@ function App(): React.JSX.Element {
       }
       await refreshDashboard(selectedName)
       setMessage(successMessage)
+      return true
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '操作失败')
+      return false
     } finally {
       setVmPending(vmName, false)
     }
+  }
+
+  async function startVm(name: string): Promise<void> {
+    patchVm(name, (vm) => ({ ...vm, status: 'starting' }))
+    const success = await mutateVm(name, () => window.api.startVm(name), `已启动 ${name}`, name)
+    if (!success) {
+      await refreshDashboard(name)
+      return
+    }
+    await refreshVmStatus(name)
+  }
+
+  async function stopVm(name: string): Promise<void> {
+    patchVm(name, (vm) => ({ ...vm, status: 'stopping' }))
+    const success = await mutateVm(name, () => window.api.stopVm(name), `已停止 ${name}`, name)
+    if (!success) {
+      await refreshDashboard(name)
+      return
+    }
+    await refreshVmStatus(name)
   }
 
   async function saveAppSettings(): Promise<void> {
@@ -225,6 +279,15 @@ function App(): React.JSX.Element {
     onPick(directory)
   }
 
+  async function pickFile(
+    filters: { name: string; extensions: string[] }[],
+    onPick: (file: string) => void
+  ): Promise<void> {
+    const file = await window.api.chooseFile(filters)
+    if (!file) return
+    onPick(file)
+  }
+
   async function appendDirectory(
     current: string[],
     onChange: (directories: string[]) => void
@@ -233,6 +296,15 @@ function App(): React.JSX.Element {
       if (current.includes(directory)) return
       onChange([...current, directory])
     })
+  }
+
+  async function copyToClipboard(text: string, successMessage: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(text)
+      setMessage(successMessage)
+    } catch {
+      setMessage('复制失败，请检查系统剪贴板权限。')
+    }
   }
 
   if (loading) {
@@ -252,6 +324,10 @@ function App(): React.JSX.Element {
       }
     : null
   const selectedVmBusy = selectedVm ? isVmPending(selectedVm.name) : false
+  const createCommandPreview = buildCreateCommandPreview(vmForm)
+  const hasDuplicateVmName = vms.some(
+    (vm) => vm.name.trim().toLowerCase() === vmForm.name.trim().toLowerCase()
+  )
 
   return (
     <div className="app-shell">
@@ -265,7 +341,10 @@ function App(): React.JSX.Element {
         <nav className="nav-list">
           <button
             className={view === 'overview' ? 'nav-item active' : 'nav-item'}
-            onClick={() => setView('overview')}
+            onClick={() => {
+              setView('overview')
+              setOverviewTab('list')
+            }}
           >
             Overview
           </button>
@@ -274,12 +353,6 @@ function App(): React.JSX.Element {
             onClick={() => setView('create')}
           >
             Create VM
-          </button>
-          <button
-            className={view === 'details' ? 'nav-item active' : 'nav-item'}
-            onClick={() => setView(selectedVm ? 'details' : 'overview')}
-          >
-            VM Details
           </button>
           <button
             className={view === 'settings' ? 'nav-item active' : 'nav-item'}
@@ -363,115 +436,286 @@ function App(): React.JSX.Element {
                   <div className="eyebrow">Virtual Machines</div>
                   <h3>虚拟机列表</h3>
                 </div>
-                <button className="ghost-button" onClick={() => setView('create')}>
-                  Create
-                </button>
-              </div>
-              <div className="vm-table">
-                <div className="table-head">
-                  <span>Name</span>
-                  <span>Status</span>
-                  <span>OS</span>
-                  <span>CPU / Memory / Disk</span>
-                  <span>Actions</span>
+                <div className="hero-actions">
+                  {selectedVm ? (
+                    <div className="subnav-tabs">
+                      <button
+                        className={overviewTab === 'list' ? 'subnav-tab active' : 'subnav-tab'}
+                        onClick={() => setOverviewTab('list')}
+                      >
+                        列表
+                      </button>
+                      <button
+                        className={overviewTab === 'details' ? 'subnav-tab active' : 'subnav-tab'}
+                        onClick={() => setOverviewTab('details')}
+                      >
+                        {selectedVm.name} 详情
+                      </button>
+                    </div>
+                  ) : null}
+                  <button className="ghost-button" onClick={() => setView('create')}>
+                    Create
+                  </button>
                 </div>
-                {vms.length === 0 ? (
-                  <div className="empty-state">还没有虚拟机，先创建一个。</div>
-                ) : (
-                  vms.map((vm) => (
-                    <div className="table-row" key={vm.name}>
-                      <div>
-                        <strong>{vm.name}</strong>
-                        <div className="muted-text">{vm.storagePath || 'default storage'}</div>
+              </div>
+              {overviewTab === 'list' ? (
+                <div className="vm-table">
+                  <div className="table-head">
+                    <span>Name</span>
+                    <span>Status</span>
+                    <span>OS</span>
+                    <span>CPU / Memory / Disk</span>
+                    <span>Actions</span>
+                  </div>
+                  {vms.length === 0 ? (
+                    <div className="empty-state">还没有虚拟机，先创建一个。</div>
+                  ) : (
+                    vms.map((vm) => (
+                      <div className="table-row" key={vm.name}>
+                        <div>
+                          <strong>{vm.name}</strong>
+                          <div className="muted-text">{vm.storagePath || 'default storage'}</div>
+                        </div>
+                        <StatusPill status={vm.status} />
+                        <span>{vm.os}</span>
+                        <span>
+                          {vm.cpu ?? '-'} CPU / {vm.memoryGb ?? '-'} GB / {vm.diskGb ?? '-'} GB
+                        </span>
+                        <div className="action-row">
+                          <button
+                            className="ghost-button"
+                            disabled={isVmPending(vm.name)}
+                            onClick={() => void openVmDetails(vm.name)}
+                          >
+                            Details
+                          </button>
+                          {vm.status === 'running' ? (
+                            <button
+                              className="secondary-button"
+                              disabled={isVmPending(vm.name)}
+                              onClick={() => void stopVm(vm.name)}
+                            >
+                              Stop
+                            </button>
+                          ) : (
+                            <button
+                              className="primary-button"
+                              disabled={isVmPending(vm.name)}
+                              onClick={() => void startVm(vm.name)}
+                            >
+                              Start
+                            </button>
+                          )}
+                          <button
+                            className="danger-button"
+                            disabled={isVmPending(vm.name)}
+                            onClick={() => {
+                              if (window.confirm(`确认删除虚拟机 ${vm.name} 吗？`)) {
+                                void mutateVm(
+                                  vm.name,
+                                  () => window.api.deleteVm(vm.name),
+                                  `已删除 ${vm.name}`
+                                )
+                              }
+                            }}
+                          >
+                            Delete
+                          </button>
+                        </div>
                       </div>
-                      <StatusPill status={vm.status} />
-                      <span>{vm.os}</span>
-                      <span>
-                        {vm.cpu ?? '-'} CPU / {vm.memoryGb ?? '-'} GB / {vm.diskGb ?? '-'} GB
-                      </span>
-                      <div className="action-row">
+                    ))
+                  )}
+                </div>
+              ) : (
+                <div className="embedded-detail">
+                  {!selectedVm ? (
+                    <div className="empty-state">先从虚拟机列表中选择一个实例。</div>
+                  ) : (
+                    <>
+                      <div className="detail-grid">
+                        <div className="detail-card">
+                          <span className="muted-text">状态</span>
+                          <StatusPill status={selectedVm.status} />
+                        </div>
+                        <div className="detail-card">
+                          <span className="muted-text">VNC</span>
+                          <strong>
+                            {selectedVm.vncHost || '127.0.0.1'}:{selectedVm.vncPort || 'n/a'}
+                          </strong>
+                        </div>
+                        <div className="detail-card">
+                          <span className="muted-text">SSH</span>
+                          <strong>
+                            {selectedVm.ipAddress || 'n/a'}:{selectedVm.sshPort || '22'}
+                          </strong>
+                        </div>
+                        <div className="detail-card">
+                          <span className="muted-text">资源</span>
+                          <strong>
+                            {selectedVm.cpu ?? '-'} CPU / {selectedVm.memoryGb ?? '-'} GB /{' '}
+                            {selectedVm.diskGb ?? '-'} GB
+                          </strong>
+                        </div>
+                      </div>
+
+                      {selectedVmUpdate ? (
+                        <div className="form-grid compact">
+                          <label>
+                            CPU
+                            <input
+                              type="number"
+                              min="1"
+                              value={selectedVmUpdate.cpu}
+                              onChange={(event) =>
+                                setSelectedVm({ ...selectedVm, cpu: Number(event.target.value) })
+                              }
+                            />
+                          </label>
+                          <label>
+                            内存 (GB)
+                            <input
+                              type="number"
+                              min="1"
+                              value={selectedVmUpdate.memoryGb}
+                              onChange={(event) =>
+                                setSelectedVm({
+                                  ...selectedVm,
+                                  memoryGb: Number(event.target.value)
+                                })
+                              }
+                            />
+                          </label>
+                          <label>
+                            磁盘 (GB)
+                            <input
+                              type="number"
+                              min="10"
+                              value={selectedVmUpdate.diskGb}
+                              onChange={(event) =>
+                                setSelectedVm({
+                                  ...selectedVm,
+                                  diskGb: Number(event.target.value)
+                                })
+                              }
+                            />
+                          </label>
+                          <label>
+                            分辨率
+                            <input
+                              value={selectedVmUpdate.resolution}
+                              onChange={(event) =>
+                                setSelectedVm({ ...selectedVm, resolution: event.target.value })
+                              }
+                            />
+                          </label>
+                          <div className="wide">
+                            <DirectoryListEditor
+                              directories={selectedVmUpdate.sharedDirectories}
+                              title="共享目录"
+                              emptyText="还没有共享目录。"
+                              onAdd={() =>
+                                void appendDirectory(
+                                  selectedVmUpdate.sharedDirectories,
+                                  (sharedDirectories) =>
+                                    setSelectedVm({
+                                      ...selectedVm,
+                                      sharedDirectories
+                                    })
+                                )
+                              }
+                              onRemove={(directory) =>
+                                setSelectedVm({
+                                  ...selectedVm,
+                                  sharedDirectories: selectedVmUpdate.sharedDirectories.filter(
+                                    (entry) => entry !== directory
+                                  )
+                                })
+                              }
+                            />
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <div className="toggle-row">
+                        <label className="toggle">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(selectedVm.headless)}
+                            onChange={(event) =>
+                              setSelectedVm({ ...selectedVm, headless: event.target.checked })
+                            }
+                          />
+                          无头模式
+                        </label>
+                        <label className="toggle">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(selectedVm.background)}
+                            onChange={(event) =>
+                              setSelectedVm({ ...selectedVm, background: event.target.checked })
+                            }
+                          />
+                          后台运行
+                        </label>
+                      </div>
+
+                      <div className="hero-actions">
+                        <button
+                          className="secondary-button"
+                          disabled={selectedVmBusy}
+                          onClick={() => void stopVm(selectedVm.name)}
+                        >
+                          Stop
+                        </button>
+                        <button
+                          className="primary-button"
+                          disabled={selectedVmBusy}
+                          onClick={() => void startVm(selectedVm.name)}
+                        >
+                          Start
+                        </button>
                         <button
                           className="ghost-button"
-                          disabled={isVmPending(vm.name)}
-                          onClick={() => void openVmDetails(vm.name)}
+                          disabled={selectedVmBusy}
+                          onClick={() =>
+                            void mutateVm(
+                              selectedVm.name,
+                              () =>
+                                window.api.updateVm({
+                                  name: selectedVm.name,
+                                  cpu: selectedVm.cpu ?? 8,
+                                  memoryGb: selectedVm.memoryGb ?? 8,
+                                  diskGb: selectedVm.diskGb ?? 50,
+                                  resolution: selectedVm.resolution || settings.defaultResolution,
+                                  headless: Boolean(selectedVm.headless),
+                                  sharedDirectories: selectedVm.sharedDirectories,
+                                  background: Boolean(selectedVm.background)
+                                }),
+                              `已更新 ${selectedVm.name}`,
+                              selectedVm.name
+                            )
+                          }
                         >
-                          Details
-                        </button>
-                        {vm.status === 'running' ? (
-                          <button
-                            className="secondary-button"
-                            disabled={isVmPending(vm.name)}
-                            onClick={() =>
-                              void mutateVm(
-                                vm.name,
-                                () => window.api.stopVm(vm.name),
-                                `已停止 ${vm.name}`,
-                                vm.name
-                              )
-                            }
-                          >
-                            Stop
-                          </button>
-                        ) : (
-                          <button
-                            className="primary-button"
-                            disabled={isVmPending(vm.name)}
-                            onClick={() =>
-                              void mutateVm(
-                                vm.name,
-                                () => window.api.startVm(vm.name),
-                                `已启动 ${vm.name}`,
-                                vm.name
-                              )
-                            }
-                          >
-                            Start
-                          </button>
-                        )}
-                        <button
-                          className="danger-button"
-                          disabled={isVmPending(vm.name)}
-                          onClick={() => {
-                            if (window.confirm(`确认删除虚拟机 ${vm.name} 吗？`)) {
-                              void mutateVm(
-                                vm.name,
-                                () => window.api.deleteVm(vm.name),
-                                `已删除 ${vm.name}`
-                              )
-                            }
-                          }}
-                        >
-                          Delete
+                          Save Changes
                         </button>
                       </div>
-                    </div>
-                  ))
-                )}
-              </div>
+                    </>
+                  )}
+                </div>
+              )}
             </section>
 
-            <section className="panel">
-              <div className="panel-header">
-                <div>
-                  <div className="eyebrow">Images</div>
-                  <h3>本地镜像缓存</h3>
+            {overviewTab === 'details' ? (
+              <section className="panel">
+                <div className="panel-header">
+                  <div>
+                    <div className="eyebrow">Logs</div>
+                    <h3>虚拟机日志</h3>
+                  </div>
                 </div>
-              </div>
-              <div className="stack-list">
-                {images.length === 0 ? (
-                  <div className="empty-state">没有检测到本地镜像缓存。</div>
-                ) : (
-                  images.map((image) => (
-                    <div className="list-card" key={`${image.name}-${image.version || 'latest'}`}>
-                      <strong>{image.name}</strong>
-                      <span>{image.version || 'latest'}</span>
-                      <span>{image.size || 'size unknown'}</span>
-                      <span className="muted-text">{image.path || 'cache path unavailable'}</span>
-                    </div>
-                  ))
-                )}
-              </div>
-            </section>
+                <pre className="log-viewer">{logs || '暂无日志。'}</pre>
+              </section>
+            ) : null}
 
             <section className="panel">
               <div className="panel-header">
@@ -494,6 +738,9 @@ function App(): React.JSX.Element {
                   <h3>创建虚拟机</h3>
                 </div>
               </div>
+              {hasDuplicateVmName && vmForm.name.trim() ? (
+                <div className="warning-banner">已存在同名虚拟机，请更换名称后再创建。</div>
+              ) : null}
               <div className="form-grid">
                 <label>
                   名称
@@ -552,14 +799,40 @@ function App(): React.JSX.Element {
                     onChange={(event) => setVmForm({ ...vmForm, resolution: event.target.value })}
                   />
                 </label>
-                <label>
-                  macOS 版本
-                  <input
-                    disabled={vmForm.os !== 'macOS'}
-                    value={vmForm.macOsVersion}
-                    onChange={(event) => setVmForm({ ...vmForm, macOsVersion: event.target.value })}
-                  />
-                </label>
+                {vmForm.os === 'macOS' ? (
+                  <>
+                    <label>
+                      IPSW 来源
+                      <select
+                        value={vmForm.ipswSource}
+                        onChange={(event) =>
+                          setVmForm({
+                            ...vmForm,
+                            ipswSource: event.target.value as CreateVmInput['ipswSource']
+                          })
+                        }
+                      >
+                        <option value="latest">让 Lume 自动下载 latest</option>
+                        <option value="local">使用本地 IPSW 文件</option>
+                      </select>
+                    </label>
+                    <label>
+                      无人值守安装
+                      <select
+                        value={vmForm.unattendedEnabled ? 'enabled' : 'disabled'}
+                        onChange={(event) =>
+                          setVmForm({
+                            ...vmForm,
+                            unattendedEnabled: event.target.value === 'enabled'
+                          })
+                        }
+                      >
+                        <option value="disabled">关闭</option>
+                        <option value="enabled">启用 unattended</option>
+                      </select>
+                    </label>
+                  </>
+                ) : null}
                 <label>
                   网络模式
                   <select
@@ -597,6 +870,77 @@ function App(): React.JSX.Element {
                     </button>
                   </div>
                 </label>
+                {vmForm.os === 'macOS' && vmForm.ipswSource === 'local' ? (
+                  <label className="wide">
+                    本地 IPSW 文件
+                    <div className="input-row">
+                      <input value={vmForm.ipswPath} readOnly />
+                      <button
+                        className="ghost-button"
+                        type="button"
+                        onClick={() =>
+                          void pickFile([{ name: 'IPSW', extensions: ['ipsw'] }], (ipswPath) =>
+                            setVmForm({ ...vmForm, ipswPath })
+                          )
+                        }
+                      >
+                        Choose IPSW
+                      </button>
+                    </div>
+                  </label>
+                ) : null}
+                {vmForm.os === 'macOS' && vmForm.unattendedEnabled ? (
+                  <>
+                    <label>
+                      unattended 模式
+                      <select
+                        value={vmForm.unattendedMode}
+                        onChange={(event) =>
+                          setVmForm({
+                            ...vmForm,
+                            unattendedMode: event.target.value as CreateVmInput['unattendedMode']
+                          })
+                        }
+                      >
+                        <option value="preset">内置 preset</option>
+                        <option value="file">本地 YAML 文件</option>
+                      </select>
+                    </label>
+                    {vmForm.unattendedMode === 'preset' ? (
+                      <label>
+                        unattended preset
+                        <select
+                          value={vmForm.unattendedPreset}
+                          onChange={(event) =>
+                            setVmForm({ ...vmForm, unattendedPreset: event.target.value })
+                          }
+                        >
+                          <option value="sequoia">sequoia</option>
+                          <option value="tahoe">tahoe</option>
+                        </select>
+                      </label>
+                    ) : (
+                      <label className="wide">
+                        unattended YAML
+                        <div className="input-row">
+                          <input value={vmForm.unattendedFilePath} readOnly />
+                          <button
+                            className="ghost-button"
+                            type="button"
+                            onClick={() =>
+                              void pickFile(
+                                [{ name: 'YAML', extensions: ['yaml', 'yml'] }],
+                                (unattendedFilePath) => setVmForm({ ...vmForm, unattendedFilePath })
+                              )
+                            }
+                          >
+                            Choose YAML
+                          </button>
+                        </div>
+                      </label>
+                    )}
+                  </>
+                ) : null}
                 <div className="wide">
                   <DirectoryListEditor
                     directories={vmForm.sharedDirectories}
@@ -636,7 +980,21 @@ function App(): React.JSX.Element {
                   后台运行
                 </label>
               </div>
-              <div className="command-preview">Command Preview: lume create ...</div>
+              <div className="command-preview-block">
+                <div className="directory-header">
+                  <span>Command Preview</span>
+                  <button
+                    className="ghost-button"
+                    type="button"
+                    onClick={() =>
+                      void copyToClipboard(createCommandPreview, '创建命令已复制到剪贴板')
+                    }
+                  >
+                    Copy
+                  </button>
+                </div>
+                <pre className="command-preview">{createCommandPreview}</pre>
+              </div>
               <div className="hero-actions">
                 <button
                   className="secondary-button"
@@ -646,7 +1004,16 @@ function App(): React.JSX.Element {
                 </button>
                 <button
                   className="primary-button"
-                  disabled={busy || !vmForm.name.trim()}
+                  disabled={
+                    busy ||
+                    hasDuplicateVmName ||
+                    !vmForm.name.trim() ||
+                    (vmForm.os === 'macOS' && vmForm.ipswSource === 'local' && !vmForm.ipswPath) ||
+                    (vmForm.os === 'macOS' &&
+                      vmForm.unattendedEnabled &&
+                      vmForm.unattendedMode === 'file' &&
+                      !vmForm.unattendedFilePath)
+                  }
                   onClick={() =>
                     void mutateVm(
                       vmForm.name,
@@ -662,237 +1029,6 @@ function App(): React.JSX.Element {
                   Create VM
                 </button>
               </div>
-            </section>
-
-            <section className="panel">
-              <div className="panel-header">
-                <div>
-                  <div className="eyebrow">Defaults</div>
-                  <h3>创建默认值</h3>
-                </div>
-              </div>
-              <div className="stack-list">
-                <div className="list-card">
-                  <strong>默认存储目录</strong>
-                  <span className="muted-text">{settings.defaultStoragePath}</span>
-                </div>
-                <div className="list-card">
-                  <strong>默认分辨率</strong>
-                  <span>{settings.defaultResolution}</span>
-                </div>
-                <div className="list-card">
-                  <strong>共享目录模板</strong>
-                  <span className="muted-text">
-                    {settings.sharedDirectories.length > 0
-                      ? settings.sharedDirectories.join(', ')
-                      : '未配置'}
-                  </span>
-                </div>
-              </div>
-            </section>
-          </section>
-        ) : null}
-
-        {view === 'details' ? (
-          <section className="panel-grid">
-            <section className="panel span-2">
-              <div className="panel-header">
-                <div>
-                  <div className="eyebrow">Details</div>
-                  <h3>{selectedVm ? selectedVm.name : '选择一个虚拟机查看详情'}</h3>
-                </div>
-              </div>
-              {!selectedVm ? (
-                <div className="empty-state">先从虚拟机列表中选择一个实例。</div>
-              ) : (
-                <>
-                  <div className="detail-grid">
-                    <div className="detail-card">
-                      <span className="muted-text">状态</span>
-                      <StatusPill status={selectedVm.status} />
-                    </div>
-                    <div className="detail-card">
-                      <span className="muted-text">VNC</span>
-                      <strong>
-                        {selectedVm.vncHost || '127.0.0.1'}:{selectedVm.vncPort || 'n/a'}
-                      </strong>
-                    </div>
-                    <div className="detail-card">
-                      <span className="muted-text">SSH</span>
-                      <strong>
-                        {selectedVm.ipAddress || 'n/a'}:{selectedVm.sshPort || '22'}
-                      </strong>
-                    </div>
-                    <div className="detail-card">
-                      <span className="muted-text">资源</span>
-                      <strong>
-                        {selectedVm.cpu ?? '-'} CPU / {selectedVm.memoryGb ?? '-'} GB /{' '}
-                        {selectedVm.diskGb ?? '-'} GB
-                      </strong>
-                    </div>
-                  </div>
-
-                  {selectedVmUpdate ? (
-                    <div className="form-grid compact">
-                      <label>
-                        CPU
-                        <input
-                          type="number"
-                          min="1"
-                          value={selectedVmUpdate.cpu}
-                          onChange={(event) =>
-                            setSelectedVm({ ...selectedVm, cpu: Number(event.target.value) })
-                          }
-                        />
-                      </label>
-                      <label>
-                        内存 (GB)
-                        <input
-                          type="number"
-                          min="1"
-                          value={selectedVmUpdate.memoryGb}
-                          onChange={(event) =>
-                            setSelectedVm({ ...selectedVm, memoryGb: Number(event.target.value) })
-                          }
-                        />
-                      </label>
-                      <label>
-                        磁盘 (GB)
-                        <input
-                          type="number"
-                          min="10"
-                          value={selectedVmUpdate.diskGb}
-                          onChange={(event) =>
-                            setSelectedVm({ ...selectedVm, diskGb: Number(event.target.value) })
-                          }
-                        />
-                      </label>
-                      <label>
-                        分辨率
-                        <input
-                          value={selectedVmUpdate.resolution}
-                          onChange={(event) =>
-                            setSelectedVm({ ...selectedVm, resolution: event.target.value })
-                          }
-                        />
-                      </label>
-                      <div className="wide">
-                        <DirectoryListEditor
-                          directories={selectedVmUpdate.sharedDirectories}
-                          title="共享目录"
-                          emptyText="还没有共享目录。"
-                          onAdd={() =>
-                            void appendDirectory(
-                              selectedVmUpdate.sharedDirectories,
-                              (sharedDirectories) =>
-                                setSelectedVm({
-                                  ...selectedVm,
-                                  sharedDirectories
-                                })
-                            )
-                          }
-                          onRemove={(directory) =>
-                            setSelectedVm({
-                              ...selectedVm,
-                              sharedDirectories: selectedVmUpdate.sharedDirectories.filter(
-                                (entry) => entry !== directory
-                              )
-                            })
-                          }
-                        />
-                      </div>
-                    </div>
-                  ) : null}
-
-                  <div className="toggle-row">
-                    <label className="toggle">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(selectedVm.headless)}
-                        onChange={(event) =>
-                          setSelectedVm({ ...selectedVm, headless: event.target.checked })
-                        }
-                      />
-                      无头模式
-                    </label>
-                    <label className="toggle">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(selectedVm.background)}
-                        onChange={(event) =>
-                          setSelectedVm({ ...selectedVm, background: event.target.checked })
-                        }
-                      />
-                      后台运行
-                    </label>
-                  </div>
-
-                  <div className="hero-actions">
-                    <button
-                      className="secondary-button"
-                      disabled={selectedVmBusy}
-                      onClick={() =>
-                        void mutateVm(
-                          selectedVm.name,
-                          () => window.api.stopVm(selectedVm.name),
-                          `已停止 ${selectedVm.name}`,
-                          selectedVm.name
-                        )
-                      }
-                    >
-                      Stop
-                    </button>
-                    <button
-                      className="primary-button"
-                      disabled={selectedVmBusy}
-                      onClick={() =>
-                        void mutateVm(
-                          selectedVm.name,
-                          () => window.api.startVm(selectedVm.name),
-                          `已启动 ${selectedVm.name}`,
-                          selectedVm.name
-                        )
-                      }
-                    >
-                      Start
-                    </button>
-                    <button
-                      className="ghost-button"
-                      disabled={selectedVmBusy}
-                      onClick={() =>
-                        void mutateVm(
-                          selectedVm.name,
-                          () =>
-                            window.api.updateVm({
-                              name: selectedVm.name,
-                              cpu: selectedVm.cpu ?? 8,
-                              memoryGb: selectedVm.memoryGb ?? 8,
-                              diskGb: selectedVm.diskGb ?? 50,
-                              resolution: selectedVm.resolution || settings.defaultResolution,
-                              headless: Boolean(selectedVm.headless),
-                              sharedDirectories: selectedVm.sharedDirectories,
-                              background: Boolean(selectedVm.background)
-                            }),
-                          `已更新 ${selectedVm.name}`,
-                          selectedVm.name
-                        )
-                      }
-                    >
-                      Save Changes
-                    </button>
-                  </div>
-                </>
-              )}
-            </section>
-
-            <section className="panel">
-              <div className="panel-header">
-                <div>
-                  <div className="eyebrow">Logs</div>
-                  <h3>运行日志</h3>
-                </div>
-              </div>
-              <pre className="log-viewer">{logs || '暂无日志。'}</pre>
             </section>
           </section>
         ) : null}
