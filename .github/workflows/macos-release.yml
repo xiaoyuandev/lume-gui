@@ -43,6 +43,16 @@ jobs:
       - name: Build macOS package
         run: pnpm build:mac
 
+      - name: List dist files
+        run: |
+          ls -la dist
+          find dist -maxdepth 1 -type f | sort
+
+      - name: Validate release assets
+        run: |
+          test -n "$(find dist -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+          test -n "$(find dist -maxdepth 1 -type f -name '*.zip' -print -quit)"
+
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -57,12 +67,14 @@ jobs:
 
       - name: Publish GitHub release assets
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.event.release.tag_name || github.ref_name }}
-          files: |
-            dist/*.dmg
-            dist/*.zip
-            dist/*.blockmap
-            dist/latest-mac.yml
-          generate_release_notes: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            "dist/Lume GUI-"*-arm64.dmg \
+            "dist/Lume GUI-"*-arm64.zip \
+            "dist/Lume GUI-"*.dmg.blockmap \
+            "dist/Lume GUI-"*.zip.blockmap \
+            dist/latest-mac.yml \
+            --clobber
