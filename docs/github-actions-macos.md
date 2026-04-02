@@ -49,6 +49,25 @@ What it does:
 2. Uploads the build artifacts to the workflow run
 3. If triggered by a tag, publishes the DMG and ZIP files to GitHub Releases
 
+## Node 24 compatibility
+
+GitHub has deprecated the Node.js 20 runtime for JavaScript-based actions.
+
+These workflows now address that in two ways:
+
+- `actions/checkout` is upgraded to `v6`
+- `actions/setup-node` is upgraded to `v6`
+- `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true` is set at workflow level
+
+This follows GitHub's Node 20 deprecation guidance:
+
+- https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+
+Reference action releases:
+
+- `actions/checkout@v6`: https://github.com/actions/checkout/releases
+- `actions/setup-node@v6`: https://github.com/actions/setup-node/releases
+
 ## Recommended release process
 
 Create a release tag like this:
