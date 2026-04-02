@@ -47,8 +47,6 @@ Platform-specific packaging commands:
 
 ```bash
 pnpm build:mac
-pnpm build:win
-pnpm build:linux
 ```
 
 ## Project Structure
@@ -57,6 +55,9 @@ pnpm build:linux
 - `src/preload`: secure renderer bridge
 - `src/renderer`: React UI
 - `docs/lume-cli-guide.md`: detailed Lume CLI usage notes
+- `docs/macos-adhoc-distribution.md`: ad-hoc macOS packaging and distribution notes
+- `docs/macos-packaging.md`: full macOS packaging workflow
+- `docs/github-actions-macos.md`: GitHub Actions automation guide
 - `build`: packaged application icons and build resources
 
 ## Notes
