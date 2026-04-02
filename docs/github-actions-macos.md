@@ -47,8 +47,10 @@ Triggers:
 What it does:
 
 1. Builds the macOS package
-2. Uploads the build artifacts to the workflow run
-3. If triggered by a tag or a published GitHub Release, publishes the DMG and ZIP files to GitHub Releases
+2. Prints the `dist/` directory in workflow logs
+3. Verifies that both `.dmg` and `.zip` were generated
+4. Uploads the build artifacts to the workflow run
+5. If triggered by a tag or published Release, uploads the DMG and ZIP files to GitHub Releases
 
 ## Node 24 compatibility
 
@@ -80,7 +82,23 @@ git push origin v1.0.1
 
 That will trigger `.github/workflows/macos-release.yml` and attach the build artifacts to a GitHub Release automatically.
 
-You can also publish a GitHub Release from the repository UI. The workflow now listens to the `release.published` event and will upload the built DMG and ZIP assets to that Release.
+You can also publish a GitHub Release from the repository UI. The workflow now listens to the `release.published` event and uploads the generated DMG and ZIP files to that Release.
+
+## Why the release workflow uploads files explicitly
+
+The packaged files in this project include spaces in filenames, for example:
+
+```text
+Lume GUI-1.0.0-arm64.dmg
+```
+
+To reduce ambiguity around file globbing inside release wrapper actions, the workflow now:
+
+1. lists the actual files in `dist/`
+2. validates that `.dmg` and `.zip` exist
+3. uploads release assets with `gh release upload --clobber`
+
+This is more predictable than relying only on `files: dist/*.dmg` in a third-party action.
 
 ## Notes about the current build mode
 
