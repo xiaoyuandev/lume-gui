@@ -1,4 +1,7 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { access } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { delimiter, join } from 'node:path'
 import { promisify } from 'node:util'
 import { buildCreateArgs } from '../shared/create-command'
 import {
@@ -28,6 +31,39 @@ type ExecOutcome = {
 
 type RunOptions = {
   timeout?: number
+}
+
+const bundledSearchPaths = [
+  join(homedir(), '.local', 'bin'),
+  '/opt/homebrew/bin',
+  '/usr/local/bin',
+  '/usr/bin',
+  '/bin',
+  '/usr/sbin',
+  '/sbin'
+]
+
+async function isExecutableFile(path: string): Promise<boolean> {
+  try {
+    await access(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function buildCommandPath(): string {
+  const currentPath = process.env['PATH'] ?? ''
+  const pathParts = currentPath.split(delimiter).filter(Boolean)
+  const merged = [...pathParts]
+
+  for (const entry of bundledSearchPaths) {
+    if (!merged.includes(entry)) {
+      merged.push(entry)
+    }
+  }
+
+  return merged.join(delimiter)
 }
 
 function toVmStatus(value: string | undefined): VmStatus {
@@ -185,16 +221,41 @@ export class LumeManager {
   private serveProcess: ChildProcessWithoutNullStreams | null = null
   private serveLogs = ''
   private lastError: string | null = null
+  private lumeExecutable: string | null = null
 
   private appendServeLogs(chunk: string): void {
     this.serveLogs = `${this.serveLogs}${chunk}`.slice(-12000)
   }
 
+  private async resolveLumeExecutable(): Promise<string> {
+    if (this.lumeExecutable) {
+      return this.lumeExecutable
+    }
+
+    const pathEntries = buildCommandPath().split(delimiter).filter(Boolean)
+    for (const directory of pathEntries) {
+      const candidate = join(directory, 'lume')
+      if (await isExecutableFile(candidate)) {
+        this.lumeExecutable = candidate
+        return candidate
+      }
+    }
+
+    this.lastError =
+      'The `lume` command was not found. Checked PATH plus common install locations such as ~/.local/bin, /opt/homebrew/bin, and /usr/local/bin.'
+    throw new Error(this.lastError)
+  }
+
   async run(args: string[], options?: RunOptions): Promise<ExecOutcome> {
     try {
-      const { stdout, stderr } = await execFileAsync('lume', args, {
+      const lumeExecutable = await this.resolveLumeExecutable()
+      const { stdout, stderr } = await execFileAsync(lumeExecutable, args, {
         timeout: options?.timeout ?? 120000,
-        maxBuffer: 1024 * 1024 * 8
+        maxBuffer: 1024 * 1024 * 8,
+        env: {
+          ...process.env,
+          PATH: buildCommandPath()
+        }
       })
       return { stdout, stderr, code: 0 }
     } catch (error) {
@@ -205,9 +266,13 @@ export class LumeManager {
       }
 
       if (execError.code === 'ENOENT') {
-        this.lastError = 'The `lume` command was not found. Install Lume and ensure it is available in PATH.'
+        this.lumeExecutable = null
+        this.lastError =
+          'The `lume` command was not found. Checked PATH plus common install locations such as ~/.local/bin, /opt/homebrew/bin, and /usr/local/bin.'
       } else if (typeof execError.stderr === 'string' && execError.stderr.trim()) {
         this.lastError = execError.stderr.trim()
+      } else if (execError.message) {
+        this.lastError = execError.message
       }
 
       return {
@@ -300,6 +365,7 @@ export class LumeManager {
 
   async startVm(name: string): Promise<CommandResult> {
     const preferences = await loadVmPreferences(name)
+    const lumeExecutable = await this.resolveLumeExecutable()
     const command = ['run']
 
     if (preferences.headless) {
@@ -313,9 +379,13 @@ export class LumeManager {
     command.push(name)
 
     try {
-      const child = spawn('lume', command, {
+      const child = spawn(lumeExecutable, command, {
         detached: preferences.background,
-        stdio: 'ignore'
+        stdio: 'ignore',
+        env: {
+          ...process.env,
+          PATH: buildCommandPath()
+        }
       })
       if (preferences.background) {
         child.unref()
@@ -333,7 +403,9 @@ export class LumeManager {
     } catch (error) {
       const spawnError = error as NodeJS.ErrnoException
       if (spawnError.code === 'ENOENT') {
-        this.lastError = 'The `lume` command was not found. Install Lume and ensure it is available in PATH.'
+        this.lumeExecutable = null
+        this.lastError =
+          'The `lume` command was not found. Checked PATH plus common install locations such as ~/.local/bin, /opt/homebrew/bin, and /usr/local/bin.'
       } else {
         this.lastError = spawnError.message
       }
@@ -421,9 +493,14 @@ export class LumeManager {
   async ensureServeRunning(): Promise<void> {
     if (this.serveProcess && !this.serveProcess.killed) return
     if (!(await this.isInstalled())) return
+    const lumeExecutable = await this.resolveLumeExecutable()
 
-    this.serveProcess = spawn('lume', ['serve'], {
-      stdio: 'pipe'
+    this.serveProcess = spawn(lumeExecutable, ['serve'], {
+      stdio: 'pipe',
+      env: {
+        ...process.env,
+        PATH: buildCommandPath()
+      }
     })
 
     this.serveProcess.stdout.on('data', (chunk: Buffer) => this.appendServeLogs(chunk.toString()))

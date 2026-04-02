@@ -325,7 +325,7 @@ function App(): React.JSX.Element {
     <div className="app-shell">
       <aside className="sidebar">
         <div>
-          <div className="eyebrow">Electron + Lume</div>
+          <div className="eyebrow">Lume GUI</div>
           <h1>Lume GUI</h1>
           <p className="sidebar-copy">A desktop control panel for Lume virtual machines on Apple Silicon.</p>
         </div>
