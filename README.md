@@ -2,6 +2,16 @@
 
 Lume GUI is an Electron desktop application for managing Lume virtual machines on Apple Silicon Macs. It provides a visual workflow for creating VMs, starting and stopping them, editing compute settings, managing shared directories, and controlling local `lume serve` behavior without working directly in the terminal for every action.
 
+## Screenshot
+
+<p align="center">
+  <img src="resources/screenshot/overview.png" style="width: 100%; height: auto;">
+</p>
+
+<p align="center">
+  <img src="resources/screenshot/createvm.png" style="width: 100%; height: auto;">
+</p>
+
 ## Features
 
 - Overview dashboard for installed VMs and current runtime status
