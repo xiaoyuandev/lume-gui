@@ -25,6 +25,12 @@ export interface VmDetail extends VmSummary {
   logs?: string
 }
 
+export interface VmPreferences {
+  headless: boolean
+  background: boolean
+  sharedDirectories: string[]
+}
+
 export interface ImageSummary {
   name: string
   version?: string | null
@@ -51,7 +57,12 @@ export interface CreateVmInput {
   memoryGb: number
   diskGb: number
   resolution: string
-  macOsVersion: string
+  ipswSource: 'latest' | 'local'
+  ipswPath: string
+  unattendedEnabled: boolean
+  unattendedMode: 'preset' | 'file'
+  unattendedPreset: string
+  unattendedFilePath: string
   networkMode: 'nat' | 'bridged'
   storagePath: string
   headless: boolean
@@ -100,5 +111,6 @@ export interface LumeApi {
   getSettings: () => Promise<AppSettings>
   saveSettings: (input: AppSettings) => Promise<AppSettings>
   chooseDirectory: () => Promise<string | null>
+  chooseFile: (filters?: { name: string; extensions: string[] }[]) => Promise<string | null>
   restartServe: () => Promise<AppStatus>
 }

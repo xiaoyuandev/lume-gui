@@ -1,0 +1,85 @@
+# GitHub Actions macOS Build Guide
+
+This project now includes GitHub Actions workflows for automatic macOS builds.
+
+## Workflows
+
+### 1. Continuous macOS build
+
+File:
+
+- `.github/workflows/macos-build.yml`
+
+Triggers:
+
+- push to `main`
+- push to `master`
+- pull request
+- manual `workflow_dispatch`
+
+What it does:
+
+1. Checks out the repository
+2. Installs Node.js and pnpm
+3. Installs dependencies with `pnpm install --frozen-lockfile`
+4. Runs `pnpm build:mac`
+5. Uploads the generated macOS artifacts to the workflow run
+
+Uploaded artifacts include:
+
+- `.dmg`
+- `.zip`
+- `.blockmap`
+- `latest-mac.yml`
+
+### 2. Release build
+
+File:
+
+- `.github/workflows/macos-release.yml`
+
+Triggers:
+
+- Git tag push matching `v*`
+- manual `workflow_dispatch`
+
+What it does:
+
+1. Builds the macOS package
+2. Uploads the build artifacts to the workflow run
+3. If triggered by a tag, publishes the DMG and ZIP files to GitHub Releases
+
+## Recommended release process
+
+Create a release tag like this:
+
+```bash
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+That will trigger `.github/workflows/macos-release.yml` and attach the build artifacts to a GitHub Release automatically.
+
+## Notes about the current build mode
+
+The GitHub workflows use the same local packaging strategy as this repository:
+
+- macOS only
+- arm64 only
+- ad-hoc signing
+- no Apple notarization
+
+That means the produced app is suitable for free open-source distribution, but users may still need to open it through Finder `Open` or `Privacy & Security > Open Anyway` on first launch.
+
+## If you later join the Apple Developer Program
+
+You can upgrade these workflows later by adding GitHub repository secrets for:
+
+- `CSC_LINK`
+- `CSC_KEY_PASSWORD`
+- `CSC_NAME`
+- `APPLE_API_KEY`
+- `APPLE_API_KEY_ID`
+- `APPLE_API_ISSUER`
+
+Then you can switch the workflow build command from ad-hoc packaging to a Developer ID signed and notarized build.
