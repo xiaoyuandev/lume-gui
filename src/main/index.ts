@@ -85,7 +85,24 @@ function createWindow(): void {
 function createTray(): void {
   if (tray) return
 
-  tray = new Tray(nativeImage.createFromPath(icon))
+  const trayIcon = (() => {
+    if (process.platform !== 'darwin') {
+      return nativeImage.createFromPath(icon)
+    }
+
+    const svg = `
+      <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
+        <path fill="black" d="M4 3.25h2.4v9.1H14v2.4H4z"/>
+        <path fill="black" d="M7.6 5h6.4l-1.7 1.7H7.6z"/>
+      </svg>
+    `
+
+    const image = nativeImage.createFromBuffer(Buffer.from(svg))
+    image.setTemplateImage(true)
+    return image.resize({ height: 18 })
+  })()
+
+  tray = new Tray(trayIcon)
   tray.setToolTip('Lume GUI')
   tray.setContextMenu(
     Menu.buildFromTemplate([

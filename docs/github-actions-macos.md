@@ -41,13 +41,14 @@ File:
 Triggers:
 
 - Git tag push matching `v*`
+- GitHub Release `published`
 - manual `workflow_dispatch`
 
 What it does:
 
 1. Builds the macOS package
 2. Uploads the build artifacts to the workflow run
-3. If triggered by a tag, publishes the DMG and ZIP files to GitHub Releases
+3. If triggered by a tag or a published GitHub Release, publishes the DMG and ZIP files to GitHub Releases
 
 ## Node 24 compatibility
 
@@ -78,6 +79,8 @@ git push origin v1.0.1
 ```
 
 That will trigger `.github/workflows/macos-release.yml` and attach the build artifacts to a GitHub Release automatically.
+
+You can also publish a GitHub Release from the repository UI. The workflow now listens to the `release.published` event and will upload the built DMG and ZIP assets to that Release.
 
 ## Notes about the current build mode
 
